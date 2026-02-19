@@ -1,17 +1,12 @@
-import { createStackNavigator } from '@react-navigation/stack';
-import React from 'react';
-import OnboardingScreen from '../screens/OnboardingScreen';
+/**
+ * AppNavigator.tsx
+ *
+ * NOTE: This file is kept for reference only. The active navigation stack
+ * is fully defined in App.tsx using @react-navigation/native-stack.
+ * This file is NOT imported or used anywhere in the app.
+ *
+ * If you want to add tab navigation or nested navigators in the future,
+ * build them here and import into App.tsx.
+ */
 
-// Placeholder for the next screen (Login) so the button doesn't crash the app
-const LoginScreenPlaceholder = () => <></>; 
-
-const Stack = createStackNavigator();
-
-export default function AppNavigator() {
-  return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="Onboarding" component={OnboardingScreen} />
-      <Stack.Screen name="Login" component={LoginScreenPlaceholder} />
-    </Stack.Navigator>
-  );
-}
+export { };

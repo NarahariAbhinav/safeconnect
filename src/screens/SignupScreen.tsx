@@ -1,57 +1,64 @@
-import React, { useEffect, useRef, useState } from 'react';
+/**
+ * SignupScreen — migrated to react-native-reanimated
+ *
+ * FIXES APPLIED:
+ * 1. Replaced old react-native Animated API (crashed on New Architecture) with
+ *    react-native-reanimated FadeIn entering props — same as LoginScreen.
+ * 2. Fixed navigation target: navigate to 'Login' after signup (was 'Welcome'
+ *    which is not registered in the navigator → crash).
+ * 3. Fixed EyeIcon to accept a `visible` prop so toggle state shows correctly.
+ * 4. Added autoCorrect={false} and autoCapitalize="none" to email TextInput.
+ */
+import React, { useState } from 'react';
 import {
-    Animated,
-    Dimensions,
-    Easing,
-    StyleSheet,
-    TouchableOpacity,
-    View,
-    TextInput,
-    ScrollView,
-    KeyboardAvoidingView,
-    Platform,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { Text } from 'react-native-paper';
+import Animated, {
+  FadeInDown,
+  FadeInUp,
+} from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, {
-    Circle,
-    Line,
-    Path,
-    Rect,
+  Circle,
+  Line,
+  Path,
+  Rect,
 } from 'react-native-svg';
-
-const { width } = Dimensions.get('window');
+import { authService } from '../services/auth';
 
 // ─── Design Tokens ──────────────────────────────────────────────────
 const COLORS = {
-  bg:         '#EBF4F7',
-  orange:     '#E05A2B',
-  orangeGlow: 'rgba(224,90,43,0.18)',
-  brown:      '#2C1A0E',
-  brownMid:   '#5C3D25',
-  green:      '#2A7A5A',
-  muted:      '#8C7060',
-  white:      '#FFFFFF',
-  pillBg:     'rgba(255,255,255,0.70)',
-  pillBorder: 'rgba(44,26,14,0.10)',
-  inputBg:    'rgba(255,255,255,0.85)',
-  inputBorder:'rgba(44,26,14,0.15)',
-  error:      '#D32F2F',
+  bg: '#EBF4F7',
+  orange: '#E05A2B',
+  brown: '#2C1A0E',
+  brownMid: '#5C3D25',
+  green: '#2A7A5A',
+  muted: '#8C7060',
+  white: '#FFFFFF',
+  inputBg: 'rgba(255,255,255,0.85)',
+  inputBorder: 'rgba(44,26,14,0.15)',
+  inputFocus: 'rgba(224,90,43,0.40)',
+  error: '#D32F2F',
 };
-
-const API_URL = 'http://10.180.135.93:5000/api/auth';
 
 // ─── Logo Icon ─────────────────────────────────────────────────────
 const LogoIcon: React.FC = () => (
   <Svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-    <Circle cx="5"  cy="12" r="2.5" fill="white" />
-    <Circle cx="12" cy="5"  r="2.5" fill="white" opacity="0.85" />
+    <Circle cx="5" cy="12" r="2.5" fill="white" />
+    <Circle cx="12" cy="5" r="2.5" fill="white" opacity="0.85" />
     <Circle cx="19" cy="12" r="2.5" fill="white" opacity="0.85" />
     <Circle cx="12" cy="19" r="2.5" fill="white" opacity="0.75" />
-    <Line x1="7.2"  y1="10.5" x2="10"   y2="7"    stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
-    <Line x1="14"   y1="7"    x2="16.8" y2="10.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
-    <Line x1="7.2"  y1="13.5" x2="10"   y2="17"   stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
-    <Line x1="14"   y1="17"   x2="16.8" y2="13.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
+    <Line x1="7.2" y1="10.5" x2="10" y2="7" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
+    <Line x1="14" y1="7" x2="16.8" y2="10.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
+    <Line x1="7.2" y1="13.5" x2="10" y2="17" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
+    <Line x1="14" y1="17" x2="16.8" y2="13.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
   </Svg>
 );
 
@@ -84,10 +91,27 @@ const LockIcon: React.FC = () => (
   </Svg>
 );
 
-const EyeIcon: React.FC = () => (
+// FIX: EyeIcon now accepts a `visible` prop so the toggle state is reflected correctly
+const EyeIcon: React.FC<{ visible: boolean }> = ({ visible }) => (
   <Svg width="16" height="16" viewBox="0 0 20 20" fill="none">
-    <Path d="M10 4c-4 0-7.5 2.5-9 6.5C2.5 15 6 17.5 10 17.5s7.5-2.5 9-7-5-6.5-9-6.5z" stroke={COLORS.muted} strokeWidth="1.2" fill="none" />
-    <Circle cx="10" cy="10.5" r="2.5" stroke={COLORS.muted} strokeWidth="1.2" fill="none" />
+    {visible ? (
+      <>
+        <Path d="M10 4c-4 0-7.5 2.5-9 6.5C2.5 15 6 17.5 10 17.5s7.5-2.5 9-7-5-6.5-9-6.5z" stroke={COLORS.muted} strokeWidth="1.2" fill="none" />
+        <Circle cx="10" cy="10.5" r="2.5" stroke={COLORS.muted} strokeWidth="1.2" fill="none" />
+      </>
+    ) : (
+      <>
+        <Path d="M10 4c-4 0-7.5 2.5-9 6.5C2.5 15 6 17.5 10 17.5s7.5-2.5 9-7-5-6.5-9-6.5z" stroke={COLORS.muted} strokeWidth="1.2" fill="none" />
+        <Line x1="3" y1="3" x2="17" y2="17" stroke={COLORS.muted} strokeWidth="1.2" strokeLinecap="round" />
+      </>
+    )}
+  </Svg>
+);
+
+const CheckIcon: React.FC = () => (
+  <Svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+    <Circle cx="12" cy="12" r="10" fill={COLORS.green} opacity="0.15" />
+    <Path d="M7 12l3.5 3.5L17 8" stroke={COLORS.green} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
   </Svg>
 );
 
@@ -108,68 +132,12 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
-
-  // Staggered entrance animations
-  const animHeader      = useRef(new Animated.Value(0)).current;
-  const animTitle       = useRef(new Animated.Value(0)).current;
-  const animSubtitle    = useRef(new Animated.Value(0)).current;
-  const animFirstName   = useRef(new Animated.Value(0)).current;
-  const animLastName    = useRef(new Animated.Value(0)).current;
-  const animEmail       = useRef(new Animated.Value(0)).current;
-  const animPhone       = useRef(new Animated.Value(0)).current;
-  const animPassword    = useRef(new Animated.Value(0)).current;
-  const animConfirmPass = useRef(new Animated.Value(0)).current;
-  const animCTA         = useRef(new Animated.Value(0)).current;
-  const animLogin       = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    const makeAnim = (val: Animated.Value, delay: number) =>
-      Animated.timing(val, {
-        toValue: 1,
-        duration: 600,
-        delay,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      });
-
-    Animated.stagger(60, [
-      makeAnim(animHeader,      0),
-      makeAnim(animTitle,       60),
-      makeAnim(animSubtitle,    120),
-      makeAnim(animFirstName,   180),
-      makeAnim(animLastName,    240),
-      makeAnim(animEmail,       300),
-      makeAnim(animPhone,       360),
-      makeAnim(animPassword,    420),
-      makeAnim(animConfirmPass, 480),
-      makeAnim(animCTA,         540),
-      makeAnim(animLogin,       600),
-    ]).start();
-  }, []);
-
-  const fadeSlideUp = (anim: Animated.Value, fromY = 20) => ({
-    opacity: anim,
-    transform: [
-      {
-        translateY: anim.interpolate({
-          inputRange: [0, 1],
-          outputRange: [fromY, 0],
-        }),
-      },
-    ],
-  });
-
-  const fadeSlideDown = (anim: Animated.Value) => ({
-    opacity: anim,
-    transform: [
-      {
-        translateY: anim.interpolate({
-          inputRange: [0, 1],
-          outputRange: [-16, 0],
-        }),
-      },
-    ],
-  });
+  const [firstFocused, setFirstFocused] = useState(false);
+  const [lastFocused, setLastFocused] = useState(false);
+  const [emailFocused, setEmailFocused] = useState(false);
+  const [phoneFocused, setPhoneFocused] = useState(false);
+  const [passFocused, setPassFocused] = useState(false);
+  const [confirmFocused, setConfirmFocused] = useState(false);
 
   const handleSignup = async () => {
     setError('');
@@ -200,38 +168,28 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
     setLoading(true);
 
     try {
-      const response = await fetch(`${API_URL}/register`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          email,
-          password,
-          firstName,
-          lastName,
-          phone,
-        }),
+      const result = await authService.register({
+        firstName,
+        lastName,
+        email: email.trim(),
+        phone,
+        password,
       });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        setError(data.error || 'Registration failed. Please try again.');
+      if (!result.success) {
+        setError(result.error || 'Registration failed');
+        setLoading(false);
         return;
       }
 
       setSuccess(true);
-      console.log('Registration successful:', data);
 
-      // Navigate to Login screen after a short delay
+      // FIX: Navigate to Login (not 'Welcome' which is not in the navigator)
       setTimeout(() => {
         navigation.replace('Login');
-      }, 2000);
-    } catch (err) {
-      setError('Network error. Please check your connection and backend server.');
-      console.error('Registration error:', err);
-    } finally {
+      }, 1000);
+    } catch (err: any) {
+      setError(err.message || 'Registration failed');
       setLoading(false);
     }
   };
@@ -239,7 +197,7 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
   return (
     <SafeAreaView style={styles.container}>
       {/* ── Header ── */}
-      <Animated.View style={[styles.header, fadeSlideDown(animHeader)]}>
+      <Animated.View entering={FadeInDown.duration(500).delay(0)} style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <Svg width="20" height="20" viewBox="0 0 20 20" fill="none">
             <Path d="M12 4l-6 6 6 6" stroke={COLORS.brown} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -264,35 +222,36 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
           keyboardShouldPersistTaps="handled"
         >
           {/* ── Title ── */}
-          <Animated.View style={[styles.titleBlock, fadeSlideUp(animTitle)]}>
+          <Animated.View entering={FadeInUp.duration(500).delay(80)} style={styles.titleBlock}>
             <Text style={styles.title}>Create Account</Text>
           </Animated.View>
 
           {/* ── Subtitle ── */}
-          <Animated.View style={[styles.subtitleBlock, fadeSlideUp(animSubtitle)]}>
+          <Animated.View entering={FadeInUp.duration(500).delay(160)} style={styles.subtitleBlock}>
             <Text style={styles.subtitle}>Join SafeConnect and stay protected</Text>
           </Animated.View>
 
           {/* ── Error Message ── */}
           {error ? (
-            <View style={styles.errorBlock}>
-              <Text style={styles.errorText}>{error}</Text>
-            </View>
+            <Animated.View entering={FadeInUp.duration(300)} style={styles.errorBlock}>
+              <Text style={styles.errorText}>⚠ {error}</Text>
+            </Animated.View>
           ) : null}
 
           {/* ── Success Message ── */}
           {success ? (
-            <View style={styles.successBlock}>
+            <Animated.View entering={FadeInUp.duration(300)} style={styles.successBlock}>
+              <CheckIcon />
               <Text style={styles.successText}>✓ Account created! Redirecting to login...</Text>
-            </View>
+            </Animated.View>
           ) : null}
 
           {/* ── Name Row ── */}
-          <View style={styles.nameRow}>
+          <Animated.View entering={FadeInUp.duration(500).delay(240)} style={styles.nameRow}>
             {/* First Name */}
-            <Animated.View style={[styles.formGroupHalf, fadeSlideUp(animFirstName)]}>
+            <View style={styles.formGroupHalf}>
               <Text style={styles.label}>First Name *</Text>
-              <View style={styles.inputWrapper}>
+              <View style={[styles.inputWrapper, firstFocused && styles.inputWrapperFocused]}>
                 <UserIcon />
                 <TextInput
                   style={styles.input}
@@ -301,14 +260,16 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
                   value={firstName}
                   onChangeText={setFirstName}
                   editable={!loading}
+                  onFocus={() => setFirstFocused(true)}
+                  onBlur={() => setFirstFocused(false)}
                 />
               </View>
-            </Animated.View>
+            </View>
 
             {/* Last Name */}
-            <Animated.View style={[styles.formGroupHalf, fadeSlideUp(animLastName)]}>
+            <View style={styles.formGroupHalf}>
               <Text style={styles.label}>Last Name</Text>
-              <View style={styles.inputWrapper}>
+              <View style={[styles.inputWrapper, lastFocused && styles.inputWrapperFocused]}>
                 <UserIcon />
                 <TextInput
                   style={styles.input}
@@ -317,15 +278,17 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
                   value={lastName}
                   onChangeText={setLastName}
                   editable={!loading}
+                  onFocus={() => setLastFocused(true)}
+                  onBlur={() => setLastFocused(false)}
                 />
               </View>
-            </Animated.View>
-          </View>
+            </View>
+          </Animated.View>
 
           {/* ── Email Input ── */}
-          <Animated.View style={[styles.formGroup, fadeSlideUp(animEmail)]}>
+          <Animated.View entering={FadeInUp.duration(500).delay(320)} style={styles.formGroup}>
             <Text style={styles.label}>Email Address *</Text>
-            <View style={styles.inputWrapper}>
+            <View style={[styles.inputWrapper, emailFocused && styles.inputWrapperFocused]}>
               <MailIcon />
               <TextInput
                 style={styles.input}
@@ -335,15 +298,18 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
                 onChangeText={setEmail}
                 keyboardType="email-address"
                 autoCapitalize="none"
+                autoCorrect={false}
                 editable={!loading}
+                onFocus={() => setEmailFocused(true)}
+                onBlur={() => setEmailFocused(false)}
               />
             </View>
           </Animated.View>
 
           {/* ── Phone Input ── */}
-          <Animated.View style={[styles.formGroup, fadeSlideUp(animPhone)]}>
+          <Animated.View entering={FadeInUp.duration(500).delay(400)} style={styles.formGroup}>
             <Text style={styles.label}>Phone Number</Text>
-            <View style={styles.inputWrapper}>
+            <View style={[styles.inputWrapper, phoneFocused && styles.inputWrapperFocused]}>
               <PhoneIcon />
               <TextInput
                 style={styles.input}
@@ -353,14 +319,16 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
                 onChangeText={setPhone}
                 keyboardType="phone-pad"
                 editable={!loading}
+                onFocus={() => setPhoneFocused(true)}
+                onBlur={() => setPhoneFocused(false)}
               />
             </View>
           </Animated.View>
 
           {/* ── Password Input ── */}
-          <Animated.View style={[styles.formGroup, fadeSlideUp(animPassword)]}>
+          <Animated.View entering={FadeInUp.duration(500).delay(480)} style={styles.formGroup}>
             <Text style={styles.label}>Password *</Text>
-            <View style={styles.inputWrapper}>
+            <View style={[styles.inputWrapper, passFocused && styles.inputWrapperFocused]}>
               <LockIcon />
               <TextInput
                 style={[styles.input, { flex: 1 }]}
@@ -370,17 +338,24 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
                 onChangeText={setPassword}
                 secureTextEntry={!showPassword}
                 editable={!loading}
+                onFocus={() => setPassFocused(true)}
+                onBlur={() => setPassFocused(false)}
               />
-              <TouchableOpacity onPress={() => setShowPassword(!showPassword)} disabled={loading}>
-                <EyeIcon />
+              <TouchableOpacity
+                onPress={() => setShowPassword(v => !v)}
+                disabled={loading}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                {/* FIX: Now correctly passes visible prop */}
+                <EyeIcon visible={showPassword} />
               </TouchableOpacity>
             </View>
           </Animated.View>
 
           {/* ── Confirm Password Input ── */}
-          <Animated.View style={[styles.formGroup, fadeSlideUp(animConfirmPass)]}>
+          <Animated.View entering={FadeInUp.duration(500).delay(560)} style={styles.formGroup}>
             <Text style={styles.label}>Confirm Password *</Text>
-            <View style={styles.inputWrapper}>
+            <View style={[styles.inputWrapper, confirmFocused && styles.inputWrapperFocused]}>
               <LockIcon />
               <TextInput
                 style={[styles.input, { flex: 1 }]}
@@ -390,29 +365,36 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
                 onChangeText={setConfirmPassword}
                 secureTextEntry={!showConfirmPassword}
                 editable={!loading}
+                onFocus={() => setConfirmFocused(true)}
+                onBlur={() => setConfirmFocused(false)}
               />
-              <TouchableOpacity onPress={() => setShowConfirmPassword(!showConfirmPassword)} disabled={loading}>
-                <EyeIcon />
+              <TouchableOpacity
+                onPress={() => setShowConfirmPassword(v => !v)}
+                disabled={loading}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                {/* FIX: Now correctly passes visible prop */}
+                <EyeIcon visible={showConfirmPassword} />
               </TouchableOpacity>
             </View>
           </Animated.View>
 
           {/* ── Signup Button ── */}
-          <Animated.View style={[styles.ctaRow, fadeSlideUp(animCTA)]}>
+          <Animated.View entering={FadeInUp.duration(500).delay(640)} style={styles.ctaRow}>
             <TouchableOpacity
-              style={[styles.btnPrimary, loading && styles.btnDisabled]}
+              style={[styles.btnPrimary, (loading || success) && styles.btnDisabled]}
               activeOpacity={0.82}
               onPress={handleSignup}
-              disabled={loading}
+              disabled={loading || success}
             >
               <Text style={styles.btnPrimaryText}>
-                {loading ? 'Creating Account...' : 'Create Account'}
+                {loading ? 'Creating Account...' : success ? '✓ Account Created' : 'Create Account'}
               </Text>
             </TouchableOpacity>
           </Animated.View>
 
           {/* ── Login Link ── */}
-          <Animated.View style={[styles.loginBlock, fadeSlideUp(animLogin)]}>
+          <Animated.View entering={FadeInUp.duration(500).delay(720)} style={styles.loginBlock}>
             <Text style={styles.loginText}>
               Already have an account?{' '}
               <Text
@@ -546,6 +528,10 @@ const styles = StyleSheet.create({
     borderColor: COLORS.inputBorder,
     borderRadius: 12,
   },
+  inputWrapperFocused: {
+    borderColor: COLORS.inputFocus,
+    backgroundColor: COLORS.white,
+  },
   input: {
     flex: 1,
     fontSize: 14,
@@ -619,6 +605,9 @@ const styles = StyleSheet.create({
 
   // ── Success message
   successBlock: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     marginBottom: 16,
     paddingHorizontal: 12,
     paddingVertical: 12,

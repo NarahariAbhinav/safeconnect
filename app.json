@@ -13,7 +13,13 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "SafeConnect uses your location for mesh networking, safe zones, and emergency alerts.",
+        "NSLocationAlwaysUsageDescription": "SafeConnect uses your location in the background to keep you safe and connected.",
+        "NSBluetoothAlwaysUsageDescription": "SafeConnect uses Bluetooth to connect with nearby mesh nodes.",
+        "NSBluetoothPeripheralUsageDescription": "SafeConnect uses Bluetooth to connect with nearby mesh nodes."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -21,7 +27,21 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_SCAN",
+        "BLUETOOTH_CONNECT",
+        "BLUETOOTH_ADVERTISE",
+        "NEARBY_WIFI_DEVICES",
+        "ACCESS_WIFI_STATE",
+        "CHANGE_WIFI_STATE",
+        "ACCESS_NETWORK_STATE"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"

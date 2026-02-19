@@ -1,295 +1,295 @@
-import React, { useEffect, useRef } from 'react';
+/**
+ * OnboardingScreen — fully rewritten with react-native-reanimated
+ *
+ * WHY: RN 0.81 + New Architecture (newArchEnabled:true) + React 19 causes
+ * the old Animated API to freeze/seal Animated.Value objects. When
+ * navigation fires mid-animation, the Animated system tries to add
+ * a '_tracking' property to the frozen object → TypeError crash.
+ *
+ * react-native-reanimated runs on the UI thread via JSI and is fully
+ * New Architecture compatible — no crash on navigation.
+ *
+ * SVG FIX: Each node SVG now defines its own <Defs> with gradient
+ * definitions so `fill="url(#...)"` works correctly. Gradients defined
+ * in one <Svg> cannot be referenced from a separate <Svg> component —
+ * they are scoped to their own SVG document. This was causing all node
+ * circles to render as solid black.
+ */
+import React, { useEffect } from 'react';
 import {
-    Animated,
-    Dimensions,
-    Easing,
-    StyleSheet,
-    TouchableOpacity,
-    View,
+  Dimensions,
+  StyleSheet,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { Text } from 'react-native-paper';
+import Animated, {
+  Easing,
+  FadeInDown,
+  FadeInUp,
+  useAnimatedStyle,
+  useSharedValue,
+  withDelay,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, {
-    Circle,
-    Defs,
-    G,
-    Line,
-    Path,
-    RadialGradient,
-    Rect,
-    Stop
+  Circle,
+  Defs,
+  Line,
+  Path,
+  RadialGradient,
+  Rect,
+  Stop,
 } from 'react-native-svg';
-
-// ─── If you're using expo-font, load these in your app entry:
-// useFonts({ 'PlayfairDisplay-BlackItalic': require('./assets/fonts/PlayfairDisplay-BlackItalic.ttf') })
-// For a quick drop-in, the styles fall back to a serif system font gracefully.
 
 const { width } = Dimensions.get('window');
 
 // ─── Design Tokens ──────────────────────────────────────────────────
 const COLORS = {
-  bg:         '#EBF4F7',
-  orange:     '#E05A2B',
+  bg: '#EBF4F7',
+  orange: '#E05A2B',
   orangeGlow: 'rgba(224,90,43,0.18)',
-  brown:      '#2C1A0E',
-  brownMid:   '#5C3D25',
-  green:      '#2A7A5A',
-  muted:      '#8C7060',
-  white:      '#FFFFFF',
-  pillBg:     'rgba(255,255,255,0.70)',
+  brown: '#2C1A0E',
+  brownMid: '#5C3D25',
+  green: '#2A7A5A',
+  muted: '#8C7060',
+  white: '#FFFFFF',
+  pillBg: 'rgba(255,255,255,0.70)',
   pillBorder: 'rgba(44,26,14,0.10)',
   greenBadge: 'rgba(42,122,90,0.12)',
-  greenBorder:'rgba(42,122,90,0.25)',
+  greenBorder: 'rgba(42,122,90,0.25)',
 };
 
-// ─── Animated SVG helpers ────────────────────────────────────────────
-const AnimatedCircle = Animated.createAnimatedComponent(Circle as any);
-const AnimatedG = Animated.createAnimatedComponent(G as any);
+// ─── Floating Node Wrapper ──────────────────────────────────────────
+const FloatingNode: React.FC<{
+  delay: number;
+  duration: number;
+  range?: number;
+  children: React.ReactNode;
+}> = ({ delay, duration, range = 6, children }) => {
+  const translateY = useSharedValue(0);
 
-// ─── Mesh Illustration ───────────────────────────────────────────────
+  useEffect(() => {
+    translateY.value = withDelay(
+      delay,
+      withRepeat(
+        withSequence(
+          withTiming(-range, { duration: duration / 2, easing: Easing.inOut(Easing.sin) }),
+          withTiming(0, { duration: duration / 2, easing: Easing.inOut(Easing.sin) }),
+        ),
+        -1,
+        true
+      )
+    );
+  }, []);
+
+  const style = useAnimatedStyle(() => ({
+    transform: [{ translateY: translateY.value }],
+  }));
+
+  return <Animated.View style={style}>{children}</Animated.View>;
+};
+
+// ─── Mesh Illustration ────────────────────────────────────────────────
+// FIX: Each node <Svg> now has its own <Defs> with gradient so
+// fill="url(#...)" resolves correctly within that SVG's scope.
 const MeshIllustration: React.FC = () => {
-  // Float animations for each node
-  const makeFloat = (duration: number, delay: number) => {
-    const anim = useRef(new Animated.Value(0)).current;
-    useEffect(() => {
-      const loop = Animated.loop(
-        Animated.sequence([
-          Animated.delay(delay),
-          Animated.timing(anim, {
-            toValue: 1,
-            duration: duration / 2,
-            easing: Easing.inOut(Easing.sin),
-            useNativeDriver: true,
-          }),
-          Animated.timing(anim, {
-            toValue: 0,
-            duration: duration / 2,
-            easing: Easing.inOut(Easing.sin),
-            useNativeDriver: true,
-          }),
-        ])
-      );
-      loop.start();
-      return () => loop.stop();
-    }, []);
-    return anim;
-  };
-
-  // Pulse ring animation
-  const makePulse = (delay: number) => {
-    const anim = useRef(new Animated.Value(0)).current;
-    useEffect(() => {
-      const loop = Animated.loop(
-        Animated.sequence([
-          Animated.delay(delay),
-          Animated.timing(anim, {
-            toValue: 1,
-            duration: 2500,
-            easing: Easing.out(Easing.quad),
-            useNativeDriver: false, // r/opacity are not native-driver compatible
-          }),
-          Animated.timing(anim, { toValue: 0, duration: 0, useNativeDriver: false }),
-        ])
-      );
-      loop.start();
-      return () => loop.stop();
-    }, []);
-    return anim;
-  };
-
-  // Data packet travel animation (0→1 along line)
-  const makePacket = (duration: number, delay: number) => {
-    const anim = useRef(new Animated.Value(0)).current;
-    useEffect(() => {
-      const loop = Animated.loop(
-        Animated.sequence([
-          Animated.delay(delay),
-          Animated.timing(anim, {
-            toValue: 1,
-            duration,
-            easing: Easing.inOut(Easing.quad),
-            useNativeDriver: false,
-          }),
-          Animated.timing(anim, { toValue: 0, duration: 0, useNativeDriver: false }),
-        ])
-      );
-      loop.start();
-      return () => loop.stop();
-    }, []);
-    return anim;
-  };
-
-  const floatCenter = makeFloat(3000, 0);
-  const floatTL     = makeFloat(3400, 500);
-  const floatTR     = makeFloat(3200, 1000);
-  const floatBL     = makeFloat(2800, 300);
-  const floatBR     = makeFloat(3600, 700);
-
-  const pulse1 = makePulse(0);
-  const pulse2 = makePulse(800);
-
-  const packet1 = makePacket(2800, 0);
-  const packet2 = makePacket(3200, 500);
-
-  const toTranslateY = (anim: Animated.Value, range = 6) =>
-    anim.interpolate({ inputRange: [0, 1], outputRange: [0, -range] });
-
-  // Pulse ring: radius 32→70, opacity 0.5→0
-  const pulseR1 = pulse1.interpolate({ inputRange: [0, 1], outputRange: [32, 70] });
-  const pulseO1 = pulse1.interpolate({ inputRange: [0, 1], outputRange: [0.5, 0] });
-  const pulseR2 = pulse2.interpolate({ inputRange: [0, 1], outputRange: [32, 70] });
-  const pulseO2 = pulse2.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0] });
-
-  // Packet 1: center(170,115) → TL(80,58)
-  const pkt1x = packet1.interpolate({ inputRange: [0, 1], outputRange: [170, 80] });
-  const pkt1y = packet1.interpolate({ inputRange: [0, 1], outputRange: [115, 58] });
-  // Packet 2: center(170,115) → TR(268,55)
-  const pkt2x = packet2.interpolate({ inputRange: [0, 1], outputRange: [170, 268] });
-  const pkt2y = packet2.interpolate({ inputRange: [0, 1], outputRange: [115, 55] });
-
   const SVG_W = Math.min(width - 20, 340);
   const scale = SVG_W / 340;
 
   return (
     <View style={styles.illustrationWrap}>
-      <Svg width={SVG_W} height={230 * scale} viewBox="0 0 340 230">
-        <Defs>
-          <RadialGradient id="nodeGrad" cx="50%" cy="50%" r="50%">
-            <Stop offset="0%" stopColor="#FFF8F3" />
-            <Stop offset="100%" stopColor="#F5EDE0" />
-          </RadialGradient>
-          <RadialGradient id="centerGrad" cx="50%" cy="50%" r="50%">
-            <Stop offset="0%" stopColor="#FFEEE6" />
-            <Stop offset="100%" stopColor="#FAE0D0" />
-          </RadialGradient>
-        </Defs>
-
-        {/* ── Connection Lines ── */}
-        <Line x1="170" y1="115" x2="80"  y2="58"  stroke={COLORS.orange} strokeWidth="1.5" strokeOpacity="0.30" strokeDasharray="8 5" />
-        <Line x1="170" y1="115" x2="268" y2="55"  stroke={COLORS.orange} strokeWidth="1.5" strokeOpacity="0.30" strokeDasharray="8 5" />
-        <Line x1="170" y1="115" x2="68"  y2="178" stroke={COLORS.orange} strokeWidth="1.5" strokeOpacity="0.25" strokeDasharray="8 5" />
+      {/* Connection lines layer */}
+      <Svg width={SVG_W} height={230 * scale} viewBox="0 0 340 230" style={{ position: 'absolute' }}>
+        <Line x1="170" y1="115" x2="80" y2="58" stroke={COLORS.orange} strokeWidth="1.5" strokeOpacity="0.30" strokeDasharray="8 5" />
+        <Line x1="170" y1="115" x2="268" y2="55" stroke={COLORS.orange} strokeWidth="1.5" strokeOpacity="0.30" strokeDasharray="8 5" />
+        <Line x1="170" y1="115" x2="68" y2="178" stroke={COLORS.orange} strokeWidth="1.5" strokeOpacity="0.25" strokeDasharray="8 5" />
         <Line x1="170" y1="115" x2="272" y2="180" stroke={COLORS.orange} strokeWidth="1.5" strokeOpacity="0.25" strokeDasharray="8 5" />
-        <Line x1="80"  y1="58"  x2="268" y2="55"  stroke={COLORS.green}  strokeWidth="1"   strokeOpacity="0.20" strokeDasharray="4 6" />
-        <Line x1="68"  y1="178" x2="272" y2="180" stroke={COLORS.green}  strokeWidth="1"   strokeOpacity="0.20" strokeDasharray="4 6" />
-        {/* Satellite */}
-        <Line x1="268" y1="55"  x2="320" y2="88"  stroke={COLORS.orange} strokeWidth="1"   strokeOpacity="0.15" strokeDasharray="3 5" />
-
-        {/* ── Pulse Rings on Center ── */}
-        <AnimatedCircle cx={170} cy={115} r={pulseR1 as any} fill="none" stroke={COLORS.orange} strokeWidth="1.2" strokeOpacity={pulseO1 as any} />
-        <AnimatedCircle cx={170} cy={115} r={pulseR2 as any} fill="none" stroke={COLORS.orange} strokeWidth="0.8" strokeOpacity={pulseO2 as any} />
-
-        {/* ── Satellite Node ── */}
-        <AnimatedG style={{ transform: [{ translateY: toTranslateY(floatTR) }] }}>
-          <Circle cx="320" cy="88" r="10" fill="url(#nodeGrad)" stroke={COLORS.orange} strokeWidth="1.2" strokeOpacity="0.4" />
-          <Circle cx="320" cy="88" r="3.5" fill={COLORS.orange} opacity="0.45" />
-        </AnimatedG>
-
-        {/* ── Top-Left Node (phone icon) ── */}
-        <AnimatedG style={{ transform: [{ translateY: toTranslateY(floatTL) }] }}>
-          <Circle cx="80" cy="58" r="26" fill="url(#nodeGrad)" stroke={COLORS.orange} strokeWidth="1.8" />
-          <Rect x="71" y="50" width="18" height="16" rx="3" fill={COLORS.orange} opacity="0.2" />
-          <Rect x="73.5" y="52.5" width="13" height="11" rx="1.5" fill={COLORS.white} opacity="0.8" />
-          <Circle cx="80" cy="63" r="1.5" fill={COLORS.orange} opacity="0.6" />
-        </AnimatedG>
-
-        {/* ── Top-Right Node (wifi icon) ── */}
-        <AnimatedG style={{ transform: [{ translateY: toTranslateY(floatTR) }] }}>
-          <Circle cx="268" cy="55" r="22" fill="url(#nodeGrad)" stroke={COLORS.green} strokeWidth="1.5" />
-          <Circle cx="268" cy="62" r="2.5" fill={COLORS.green} />
-          <Path d="M262 56a8.5 8.5 0 0112 0"  stroke={COLORS.green} strokeWidth="1.5" strokeLinecap="round" fill="none" opacity="0.5" />
-          <Path d="M264.5 58.5a5 5 0 017 0"   stroke={COLORS.green} strokeWidth="1.5" strokeLinecap="round" fill="none" opacity="0.75" />
-        </AnimatedG>
-
-        {/* ── Center / Main Node (mesh link icon) ── */}
-        <AnimatedG style={{ transform: [{ translateY: toTranslateY(floatCenter) }] }}>
-          <Circle cx="170" cy="115" r="36" fill="url(#centerGrad)" stroke={COLORS.orange} strokeWidth="2.5" />
-          <Circle cx="163" cy="110" r="5"  fill="none" stroke={COLORS.orange} strokeWidth="2" />
-          <Circle cx="177" cy="110" r="5"  fill="none" stroke={COLORS.orange} strokeWidth="2" />
-          <Circle cx="170" cy="122" r="5"  fill="none" stroke={COLORS.orange} strokeWidth="2" />
-          <Line x1="163" y1="115" x2="165" y2="117" stroke={COLORS.orange} strokeWidth="2" strokeLinecap="round" />
-          <Line x1="177" y1="115" x2="175" y2="117" stroke={COLORS.orange} strokeWidth="2" strokeLinecap="round" />
-        </AnimatedG>
-
-        {/* ── Bottom-Left Node (person icon) ── */}
-        <AnimatedG style={{ transform: [{ translateY: toTranslateY(floatBL) }] }}>
-          <Circle cx="68" cy="178" r="20" fill="url(#nodeGrad)" stroke={COLORS.green} strokeWidth="1.5" />
-          <Circle cx="68" cy="171" r="5"  fill={COLORS.green} opacity="0.5" />
-          <Path d="M58 185c0-5.5 4.5-10 10-10s10 4.5 10 10" fill={COLORS.green} opacity="0.35" />
-        </AnimatedG>
-
-        {/* ── Bottom-Right Node (signal bars) ── */}
-        <AnimatedG style={{ transform: [{ translateY: toTranslateY(floatBR) }] }}>
-          <Circle cx="272" cy="180" r="22" fill="url(#nodeGrad)" stroke={COLORS.orange} strokeWidth="1.5" />
-          <Rect x="263" y="178" width="4" height="6"  rx="1" fill={COLORS.orange} opacity="0.5" />
-          <Rect x="269" y="174" width="4" height="10" rx="1" fill={COLORS.orange} opacity="0.65" />
-          <Rect x="275" y="170" width="4" height="14" rx="1" fill={COLORS.orange} opacity="0.85" />
-        </AnimatedG>
-
-        {/* ── Animated Data Packets ── */}
-        <AnimatedCircle cx={pkt1x as any} cy={pkt1y as any} r={4} fill={COLORS.orange} opacity="0.6" />
-        <AnimatedCircle cx={pkt2x as any} cy={pkt2y as any} r={3} fill={COLORS.green}  opacity="0.55" />
+        <Line x1="80" y1="58" x2="268" y2="55" stroke={COLORS.green} strokeWidth="1" strokeOpacity="0.20" strokeDasharray="4 6" />
+        <Line x1="68" y1="178" x2="272" y2="180" stroke={COLORS.green} strokeWidth="1" strokeOpacity="0.20" strokeDasharray="4 6" />
+        <Line x1="268" y1="55" x2="320" y2="88" stroke={COLORS.orange} strokeWidth="1" strokeOpacity="0.15" strokeDasharray="3 5" />
       </Svg>
+
+      {/* Nodes layer — each SVG has its own gradient defs */}
+      <View style={[{ width: SVG_W, height: 230 * scale }]}>
+
+        {/* Center node */}
+        <FloatingNode delay={0} duration={3000} range={5}>
+          <View style={{ position: 'absolute', left: 134 * scale, top: 79 * scale }}>
+            <Svg width={72 * scale} height={72 * scale} viewBox="0 0 72 72">
+              <Defs>
+                <RadialGradient id="cg" cx="50%" cy="50%" r="50%">
+                  <Stop offset="0%" stopColor="#FFEEE6" />
+                  <Stop offset="100%" stopColor="#FAE0D0" />
+                </RadialGradient>
+              </Defs>
+              <Circle cx="36" cy="36" r="36" fill="url(#cg)" stroke={COLORS.orange} strokeWidth="2.5" />
+              <Circle cx="29" cy="31" r="5" fill="none" stroke={COLORS.orange} strokeWidth="2" />
+              <Circle cx="43" cy="31" r="5" fill="none" stroke={COLORS.orange} strokeWidth="2" />
+              <Circle cx="36" cy="43" r="5" fill="none" stroke={COLORS.orange} strokeWidth="2" />
+              <Line x1="29" y1="36" x2="31" y2="38" stroke={COLORS.orange} strokeWidth="2" strokeLinecap="round" />
+              <Line x1="43" y1="36" x2="41" y2="38" stroke={COLORS.orange} strokeWidth="2" strokeLinecap="round" />
+            </Svg>
+          </View>
+        </FloatingNode>
+
+        {/* Top-left node */}
+        <FloatingNode delay={500} duration={3400} range={6}>
+          <View style={{ position: 'absolute', left: 54 * scale, top: 32 * scale }}>
+            <Svg width={52 * scale} height={52 * scale} viewBox="0 0 52 52">
+              <Defs>
+                <RadialGradient id="ng1" cx="50%" cy="50%" r="50%">
+                  <Stop offset="0%" stopColor="#FFF8F3" />
+                  <Stop offset="100%" stopColor="#F5EDE0" />
+                </RadialGradient>
+              </Defs>
+              <Circle cx="26" cy="26" r="26" fill="url(#ng1)" stroke={COLORS.orange} strokeWidth="1.8" />
+              <Rect x="17" y="18" width="18" height="16" rx="3" fill={COLORS.orange} opacity="0.2" />
+              <Rect x="19.5" y="20.5" width="13" height="11" rx="1.5" fill={COLORS.white} opacity="0.8" />
+              <Circle cx="26" cy="31" r="1.5" fill={COLORS.orange} opacity="0.6" />
+            </Svg>
+          </View>
+        </FloatingNode>
+
+        {/* Top-right node */}
+        <FloatingNode delay={1000} duration={3200} range={7}>
+          <View style={{ position: 'absolute', left: 246 * scale, top: 33 * scale }}>
+            <Svg width={44 * scale} height={44 * scale} viewBox="0 0 44 44">
+              <Defs>
+                <RadialGradient id="ng2" cx="50%" cy="50%" r="50%">
+                  <Stop offset="0%" stopColor="#FFF8F3" />
+                  <Stop offset="100%" stopColor="#F5EDE0" />
+                </RadialGradient>
+              </Defs>
+              <Circle cx="22" cy="22" r="22" fill="url(#ng2)" stroke={COLORS.green} strokeWidth="1.5" />
+              <Circle cx="22" cy="29" r="2.5" fill={COLORS.green} />
+              <Path d="M16 23a8.5 8.5 0 0112 0" stroke={COLORS.green} strokeWidth="1.5" strokeLinecap="round" fill="none" opacity="0.5" />
+              <Path d="M18.5 25.5a5 5 0 017 0" stroke={COLORS.green} strokeWidth="1.5" strokeLinecap="round" fill="none" opacity="0.75" />
+            </Svg>
+          </View>
+        </FloatingNode>
+
+        {/* Bottom-left node */}
+        <FloatingNode delay={300} duration={2800} range={5}>
+          <View style={{ position: 'absolute', left: 48 * scale, top: 158 * scale }}>
+            <Svg width={40 * scale} height={40 * scale} viewBox="0 0 40 40">
+              <Defs>
+                <RadialGradient id="ng3" cx="50%" cy="50%" r="50%">
+                  <Stop offset="0%" stopColor="#FFF8F3" />
+                  <Stop offset="100%" stopColor="#F5EDE0" />
+                </RadialGradient>
+              </Defs>
+              <Circle cx="20" cy="20" r="20" fill="url(#ng3)" stroke={COLORS.green} strokeWidth="1.5" />
+              <Circle cx="20" cy="13" r="5" fill={COLORS.green} opacity="0.5" />
+              <Path d="M10 27c0-5.5 4.5-10 10-10s10 4.5 10 10" fill={COLORS.green} opacity="0.35" />
+            </Svg>
+          </View>
+        </FloatingNode>
+
+        {/* Bottom-right node */}
+        <FloatingNode delay={700} duration={3600} range={6}>
+          <View style={{ position: 'absolute', left: 250 * scale, top: 158 * scale }}>
+            <Svg width={44 * scale} height={44 * scale} viewBox="0 0 44 44">
+              <Defs>
+                <RadialGradient id="ng4" cx="50%" cy="50%" r="50%">
+                  <Stop offset="0%" stopColor="#FFF8F3" />
+                  <Stop offset="100%" stopColor="#F5EDE0" />
+                </RadialGradient>
+              </Defs>
+              <Circle cx="22" cy="22" r="22" fill="url(#ng4)" stroke={COLORS.orange} strokeWidth="1.5" />
+              <Rect x="13" y="20" width="4" height="6" rx="1" fill={COLORS.orange} opacity="0.5" />
+              <Rect x="19" y="16" width="4" height="10" rx="1" fill={COLORS.orange} opacity="0.65" />
+              <Rect x="25" y="12" width="4" height="14" rx="1" fill={COLORS.orange} opacity="0.85" />
+            </Svg>
+          </View>
+        </FloatingNode>
+
+        {/* Satellite node */}
+        <FloatingNode delay={200} duration={2600} range={4}>
+          <View style={{ position: 'absolute', left: 310 * scale, top: 78 * scale }}>
+            <Svg width={20 * scale} height={20 * scale} viewBox="0 0 20 20">
+              <Defs>
+                <RadialGradient id="ng5" cx="50%" cy="50%" r="50%">
+                  <Stop offset="0%" stopColor="#FFF8F3" />
+                  <Stop offset="100%" stopColor="#F5EDE0" />
+                </RadialGradient>
+              </Defs>
+              <Circle cx="10" cy="10" r="10" fill="url(#ng5)" stroke={COLORS.orange} strokeWidth="1.2" strokeOpacity="0.4" />
+              <Circle cx="10" cy="10" r="3.5" fill={COLORS.orange} opacity="0.45" />
+            </Svg>
+          </View>
+        </FloatingNode>
+      </View>
     </View>
   );
 };
 
-// ─── Logo Badge Icon ─────────────────────────────────────────────────
+// ─── Logo Icon ────────────────────────────────────────────────────────
 const LogoIcon: React.FC = () => (
   <Svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-    <Circle cx="5"  cy="12" r="2.5" fill="white" />
-    <Circle cx="12" cy="5"  r="2.5" fill="white" opacity="0.85" />
+    <Circle cx="5" cy="12" r="2.5" fill="white" />
+    <Circle cx="12" cy="5" r="2.5" fill="white" opacity="0.85" />
     <Circle cx="19" cy="12" r="2.5" fill="white" opacity="0.85" />
     <Circle cx="12" cy="19" r="2.5" fill="white" opacity="0.75" />
-    <Line x1="7.2"  y1="10.5" x2="10"   y2="7"    stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
-    <Line x1="14"   y1="7"    x2="16.8" y2="10.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
-    <Line x1="7.2"  y1="13.5" x2="10"   y2="17"   stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
-    <Line x1="14"   y1="17"   x2="16.8" y2="13.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
+    <Line x1="7.2" y1="10.5" x2="10" y2="7" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
+    <Line x1="14" y1="7" x2="16.8" y2="10.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
+    <Line x1="7.2" y1="13.5" x2="10" y2="17" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
+    <Line x1="14" y1="17" x2="16.8" y2="13.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
   </Svg>
 );
 
-// ─── Link / Mesh CTA Icon ─────────────────────────────────────────────
-const LinkIcon: React.FC = () => (
-  <Svg width="18" height="18" viewBox="0 0 20 20" fill="none">
-    <Circle cx="6"  cy="10" r="2.5" stroke="white" strokeWidth="1.6" />
-    <Circle cx="14" cy="10" r="2.5" stroke="white" strokeWidth="1.6" />
-    <Line x1="8.5" y1="10" x2="11.5" y2="10" stroke="white" strokeWidth="1.6" strokeLinecap="round" />
+// ─── Shield Icon ─────────────────────────────────────────────────────
+const ShieldCheckIcon: React.FC = () => (
+  <Svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+    <Path d="M7 1L1 4v3c0 3.3 2.6 6.3 6 7 3.4-.7 6-3.7 6-7V4L7 1z" stroke={COLORS.brownMid} strokeWidth="1.3" fill="none" />
+    <Path d="M5 7l1.5 1.5L9.5 5.5" stroke={COLORS.brownMid} strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
   </Svg>
 );
 
-// ─── Play Icon ───────────────────────────────────────────────────────
-const PlayIcon: React.FC = () => (
-  <Svg width="12" height="14" viewBox="0 0 14 16" fill="none">
-    <Path d="M2 1.5l10 6.5-10 6.5V1.5z" fill="none" stroke={COLORS.brown} strokeWidth="1.6" strokeLinejoin="round" />
+const RangeIcon: React.FC = () => (
+  <Svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+    <Circle cx="7" cy="7" r="5.5" stroke={COLORS.brownMid} strokeWidth="1.3" />
+    <Line x1="4" y1="7" x2="10" y2="7" stroke={COLORS.brownMid} strokeWidth="1.3" strokeLinecap="round" />
+    <Line x1="7" y1="4" x2="7" y2="10" stroke={COLORS.brownMid} strokeWidth="1.3" strokeLinecap="round" />
   </Svg>
 );
 
-// ─── Badge Dot with Pulse ─────────────────────────────────────────────
+const MeshMiniIcon: React.FC = () => (
+  <Svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+    <Circle cx="3" cy="7" r="2" stroke={COLORS.brownMid} strokeWidth="1.2" />
+    <Circle cx="11" cy="7" r="2" stroke={COLORS.brownMid} strokeWidth="1.2" />
+    <Circle cx="7" cy="3" r="2" stroke={COLORS.brownMid} strokeWidth="1.2" />
+    <Line x1="5" y1="7" x2="9" y2="7" stroke={COLORS.brownMid} strokeWidth="1.2" strokeLinecap="round" />
+    <Line x1="7" y1="5" x2="5.5" y2="6" stroke={COLORS.brownMid} strokeWidth="1.2" strokeLinecap="round" />
+    <Line x1="7" y1="5" x2="8.5" y2="6" stroke={COLORS.brownMid} strokeWidth="1.2" strokeLinecap="round" />
+  </Svg>
+);
+
+// ─── Pulse Dot (reanimated — no crash) ───────────────────────────────
 const PulseDot: React.FC = () => {
-  const anim = useRef(new Animated.Value(0)).current;
+  const scale = useSharedValue(1);
+
   useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(anim, { toValue: 1, duration: 1000, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
-        Animated.timing(anim, { toValue: 0, duration: 1000, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
-      ])
-    ).start();
+    scale.value = withRepeat(
+      withSequence(
+        withTiming(1.4, { duration: 900, easing: Easing.inOut(Easing.ease) }),
+        withTiming(1.0, { duration: 900, easing: Easing.inOut(Easing.ease) }),
+      ),
+      -1,
+      false
+    );
   }, []);
 
-  const shadowRadius = anim.interpolate({ inputRange: [0, 1], outputRange: [3, 7] });
-  const shadowOpacity = anim.interpolate({ inputRange: [0, 1], outputRange: [0.2, 0.1] });
+  const style = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+    opacity: 2 - scale.value,
+  }));
 
   return (
-    <Animated.View
-      style={[
-        styles.badgeDot,
-        {
-          shadowColor: COLORS.green,
-          shadowRadius,
-          shadowOpacity,
-          elevation: 3,
-        },
-      ]}
-    />
+    <Animated.View style={[styles.badgeDot, style]} />
   );
 };
 
@@ -302,102 +302,17 @@ const FeaturePill: React.FC<FeaturePillProps> = ({ label, icon }) => (
   </View>
 );
 
-// ─── Shield Icon ─────────────────────────────────────────────────────
-const ShieldCheckIcon: React.FC = () => (
-  <Svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-    <Path d="M7 1L1 4v3c0 3.3 2.6 6.3 6 7 3.4-.7 6-3.7 6-7V4L7 1z" stroke={COLORS.brownMid} strokeWidth="1.3" fill="none" />
-    <Path d="M5 7l1.5 1.5L9.5 5.5" stroke={COLORS.brownMid} strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-  </Svg>
-);
-
-// ─── Globe/Range Icon ─────────────────────────────────────────────────
-const RangeIcon: React.FC = () => (
-  <Svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-    <Circle cx="7" cy="7" r="5.5" stroke={COLORS.brownMid} strokeWidth="1.3" />
-    <Line x1="4" y1="7" x2="10" y2="7" stroke={COLORS.brownMid} strokeWidth="1.3" strokeLinecap="round" />
-    <Line x1="7" y1="4" x2="7"  y2="10" stroke={COLORS.brownMid} strokeWidth="1.3" strokeLinecap="round" />
-  </Svg>
-);
-
-// ─── Mesh Mini Icon ───────────────────────────────────────────────────
-const MeshMiniIcon: React.FC = () => (
-  <Svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-    <Circle cx="3"  cy="7"  r="2" stroke={COLORS.brownMid} strokeWidth="1.2" />
-    <Circle cx="11" cy="7"  r="2" stroke={COLORS.brownMid} strokeWidth="1.2" />
-    <Circle cx="7"  cy="3"  r="2" stroke={COLORS.brownMid} strokeWidth="1.2" />
-    <Line x1="5" y1="7"  x2="9"   y2="7"  stroke={COLORS.brownMid} strokeWidth="1.2" strokeLinecap="round" />
-    <Line x1="7" y1="5"  x2="5.5" y2="6"  stroke={COLORS.brownMid} strokeWidth="1.2" strokeLinecap="round" />
-    <Line x1="7" y1="5"  x2="8.5" y2="6"  stroke={COLORS.brownMid} strokeWidth="1.2" strokeLinecap="round" />
-  </Svg>
-);
-
 // ─── Main Screen ──────────────────────────────────────────────────────
 interface Props {
   navigation: any;
 }
 
 const OnboardingScreen: React.FC<Props> = ({ navigation }) => {
-  // Staggered entrance animations
-  const animHeader    = useRef(new Animated.Value(0)).current;
-  const animIllus     = useRef(new Animated.Value(0)).current;
-  const animBadge     = useRef(new Animated.Value(0)).current;
-  const animHeadline  = useRef(new Animated.Value(0)).current;
-  const animSubtext   = useRef(new Animated.Value(0)).current;
-  const animFeatures  = useRef(new Animated.Value(0)).current;
-  const animCTA       = useRef(new Animated.Value(0)).current;
-  const animFooter    = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    const makeAnim = (val: Animated.Value, delay: number) =>
-      Animated.timing(val, {
-        toValue: 1,
-        duration: 600,
-        delay,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      });
-
-    Animated.stagger(80, [
-      makeAnim(animHeader,   0),
-      makeAnim(animIllus,    80),
-      makeAnim(animBadge,    160),
-      makeAnim(animHeadline, 240),
-      makeAnim(animSubtext,  320),
-      makeAnim(animFeatures, 400),
-      makeAnim(animCTA,      480),
-      makeAnim(animFooter,   560),
-    ]).start();
-  }, []);
-
-  const fadeSlideUp = (anim: Animated.Value, fromY = 20) => ({
-    opacity: anim,
-    transform: [
-      {
-        translateY: anim.interpolate({
-          inputRange: [0, 1],
-          outputRange: [fromY, 0],
-        }),
-      },
-    ],
-  });
-
-  const fadeSlideDown = (anim: Animated.Value) => ({
-    opacity: anim,
-    transform: [
-      {
-        translateY: anim.interpolate({
-          inputRange: [0, 1],
-          outputRange: [-16, 0],
-        }),
-      },
-    ],
-  });
-
   return (
     <SafeAreaView style={styles.container}>
 
       {/* ── Header ── */}
-      <Animated.View style={[styles.header, fadeSlideDown(animHeader)]}>
+      <Animated.View entering={FadeInDown.duration(500).delay(0)} style={styles.header}>
         <View style={styles.logoBadge}>
           <LogoIcon />
         </View>
@@ -407,29 +322,42 @@ const OnboardingScreen: React.FC<Props> = ({ navigation }) => {
       </Animated.View>
 
       {/* ── Illustration ── */}
-      <Animated.View style={fadeSlideUp(animIllus, 12)}>
+      <Animated.View entering={FadeInUp.duration(600).delay(80)}>
         <MeshIllustration />
       </Animated.View>
 
       {/* ── Content ── */}
       <View style={styles.content}>
 
+        {/* Live badge */}
+        <Animated.View entering={FadeInUp.duration(500).delay(200)} style={styles.badge}>
+          <PulseDot />
+          <Text style={styles.badgeText}>14 Nodes Active Nearby</Text>
+        </Animated.View>
+
         {/* Headline */}
-        <Animated.View style={[styles.headlineBlock, fadeSlideUp(animHeadline)]}>
+        <Animated.View entering={FadeInUp.duration(500).delay(280)} style={styles.headlineBlock}>
           <Text style={styles.headline}>
             Stronger <Text style={styles.headlineAccent}>Together</Text>
           </Text>
         </Animated.View>
 
         {/* Subtitle */}
-        <Animated.View style={[styles.subtitleBlock, fadeSlideUp(animSubtext)]}>
+        <Animated.View entering={FadeInUp.duration(500).delay(360)} style={styles.subtitleBlock}>
           <Text style={styles.subtitle}>
             Stay connected when it matters most
           </Text>
         </Animated.View>
 
-        {/* CTA Button */}
-        <Animated.View style={[styles.ctaRow, fadeSlideUp(animCTA)]}>
+        {/* Feature pills */}
+        <Animated.View entering={FadeInUp.duration(500).delay(440)} style={styles.featuresRow}>
+          <FeaturePill label="Offline Mesh" icon={<MeshMiniIcon />} />
+          <FeaturePill label="5 km Range" icon={<RangeIcon />} />
+          <FeaturePill label="Encrypted" icon={<ShieldCheckIcon />} />
+        </Animated.View>
+
+        {/* CTA Buttons */}
+        <Animated.View entering={FadeInUp.duration(500).delay(520)} style={styles.ctaRow}>
           <TouchableOpacity
             style={styles.btnPrimary}
             activeOpacity={0.82}
@@ -437,12 +365,23 @@ const OnboardingScreen: React.FC<Props> = ({ navigation }) => {
           >
             <Text style={styles.btnPrimaryText}>Get Started</Text>
           </TouchableOpacity>
+
+          {/* Emergency Access — no login required */}
+          <TouchableOpacity
+            style={styles.btnEmergency}
+            activeOpacity={0.80}
+            onPress={() => navigation.navigate('EmergencyAccess')}
+          >
+            <Text style={styles.btnEmergencyIcon}>🚨</Text>
+            <Text style={styles.btnEmergencyText}>Emergency Access</Text>
+            <Text style={styles.btnEmergencyHint}>No login needed</Text>
+          </TouchableOpacity>
         </Animated.View>
 
       </View>
 
-      {/* ── Footer Pagination ── */}
-      <Animated.View style={[styles.footerNav, fadeSlideUp(animFooter)]}>
+      {/* ── Footer ── */}
+      <Animated.View entering={FadeInUp.duration(500).delay(600)} style={styles.footerNav}>
         <View style={styles.dots}>
           <View style={[styles.dot, styles.dotActive]} />
           <View style={styles.dot} />
@@ -502,7 +441,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: 2,
     marginBottom: 12,
-    height: 280,
+    height: 230,
   },
 
   // ── Content
@@ -533,7 +472,6 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     backgroundColor: COLORS.green,
-    shadowOffset: { width: 0, height: 0 },
   },
   badgeText: {
     fontSize: 11,
@@ -601,6 +539,7 @@ const styles = StyleSheet.create({
   ctaRow: {
     width: '100%',
     marginBottom: 12,
+    gap: 10,
   },
   btnPrimary: {
     flexDirection: 'row',
@@ -622,21 +561,30 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.2,
   },
-  btnSecondary: {
+  btnEmergency: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: 'rgba(255,255,255,0.65)',
+    backgroundColor: 'rgba(211,47,47,0.09)',
     borderWidth: 1.5,
-    borderColor: 'rgba(44,26,14,0.15)',
+    borderColor: 'rgba(211,47,47,0.30)',
     borderRadius: 100,
     paddingVertical: 14,
   },
-  btnSecondaryText: {
-    color: COLORS.brown,
+  btnEmergencyIcon: {
+    fontSize: 16,
+  },
+  btnEmergencyText: {
+    color: '#D32F2F',
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
+    letterSpacing: 0.1,
+  },
+  btnEmergencyHint: {
+    color: 'rgba(211,47,47,0.60)',
+    fontSize: 11,
+    fontWeight: '500',
   },
 
   // Footer

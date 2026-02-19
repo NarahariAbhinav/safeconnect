@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity } from 'react-native';
+import { SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 const WelcomeScreen = ({ navigation }: { navigation: any }) => {
   return (
@@ -7,12 +7,12 @@ const WelcomeScreen = ({ navigation }: { navigation: any }) => {
       <View style={styles.content}>
         <Text style={styles.title}>Welcome to SafeConnect</Text>
         <Text style={styles.subtitle}>Your safety companion</Text>
-        
-        <TouchableOpacity 
+
+        <TouchableOpacity
           style={styles.button}
           onPress={() => navigation.navigate('Login')}
         >
-          <Text style={styles.buttonText}>Logout</Text>
+          <Text style={styles.buttonText}>Get Started</Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>
