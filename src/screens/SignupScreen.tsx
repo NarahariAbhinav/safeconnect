@@ -144,15 +144,25 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
     setSuccess(false);
 
     // Validate inputs
-    if (!firstName || !email || !password || !confirmPassword) {
+    if (!firstName || !phone || !password || !confirmPassword) {
       setError('Please fill in all required fields');
       return;
     }
 
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      setError('Please enter a valid email address');
+    // Validate phone number (basic check for at least 10 digits)
+    const phoneDigits = phone.replace(/\D/g, '');
+    if (phoneDigits.length < 10) {
+      setError('Please enter a valid phone number (at least 10 digits)');
       return;
+    }
+
+    // Validate email only if provided
+    if (email.trim()) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        setError('Please enter a valid email address');
+        return;
+      }
     }
 
     if (password.length < 6) {
@@ -171,7 +181,7 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
       const result = await authService.register({
         firstName,
         lastName,
-        email: email.trim(),
+        email: email.trim() ? email.trim() : undefined,
         phone,
         password,
       });
@@ -184,9 +194,12 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
 
       setSuccess(true);
 
-      // FIX: Navigate to Login (not 'Welcome' which is not in the navigator)
+      // Navigate directly to Home since authService.register() auto-logs in the user
       setTimeout(() => {
-        navigation.replace('Login');
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'Home', params: { user: result.user } }],
+        });
       }, 1000);
     } catch (err: any) {
       setError(err.message || 'Registration failed');
@@ -228,7 +241,7 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
 
           {/* ── Subtitle ── */}
           <Animated.View entering={FadeInUp.duration(500).delay(160)} style={styles.subtitleBlock}>
-            <Text style={styles.subtitle}>Join SafeConnect and stay protected</Text>
+            <Text style={styles.subtitle}>Join SafeConnect with your phone number</Text>
           </Animated.View>
 
           {/* ── Error Message ── */}
@@ -287,7 +300,7 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
 
           {/* ── Email Input ── */}
           <Animated.View entering={FadeInUp.duration(500).delay(320)} style={styles.formGroup}>
-            <Text style={styles.label}>Email Address *</Text>
+            <Text style={styles.label}>Email Address (Optional)</Text>
             <View style={[styles.inputWrapper, emailFocused && styles.inputWrapperFocused]}>
               <MailIcon />
               <TextInput
@@ -308,7 +321,7 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
 
           {/* ── Phone Input ── */}
           <Animated.View entering={FadeInUp.duration(500).delay(400)} style={styles.formGroup}>
-            <Text style={styles.label}>Phone Number</Text>
+            <Text style={styles.label}>Phone Number *</Text>
             <View style={[styles.inputWrapper, phoneFocused && styles.inputWrapperFocused]}>
               <PhoneIcon />
               <TextInput

@@ -1,8 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import React, { useEffect, useState } from 'react';
-import { StatusBar, StyleSheet } from 'react-native';
+import React, { Component, useEffect, useState } from 'react';
+import { StatusBar, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Text } from 'react-native-paper';
 import Animated, {
   Easing,
@@ -21,6 +21,49 @@ import SignupScreen from './src/screens/SignupScreen';
 import WelcomeScreen from './src/screens/WelcomeScreen';
 
 const Stack = createNativeStackNavigator();
+
+// ─── Error Boundary ───────────────────────────────────────────────
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class ErrorBoundary extends Component<{ children: React.ReactNode }, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { hasError: false, error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  handleReset = () => this.setState({ hasError: false, error: null });
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={errorStyles.container}>
+          <Text style={errorStyles.emoji}>⚠️</Text>
+          <Text style={errorStyles.title}>Something went wrong</Text>
+          <Text style={errorStyles.message}>
+            {this.state.error?.message || 'An unexpected error occurred'}
+          </Text>
+          <TouchableOpacity style={errorStyles.btn} onPress={this.handleReset}>
+            <Text style={errorStyles.btnText}>Try Again</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+const errorStyles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#EBF4F7', alignItems: 'center', justifyContent: 'center', padding: 32 },
+  emoji: { fontSize: 48, marginBottom: 16 },
+  title: { fontSize: 22, fontWeight: '800', color: '#2C1A0E', marginBottom: 8 },
+  message: { fontSize: 14, color: '#8C7060', textAlign: 'center', lineHeight: 20, marginBottom: 24 },
+  btn: { backgroundColor: '#E05A2B', borderRadius: 100, paddingVertical: 14, paddingHorizontal: 32 },
+  btnText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
+});
 
 // ─── Keys ──────────────────────────────────────────────────────────
 const KEY_HAS_LAUNCHED = 'safeconnect_has_launched';
@@ -159,42 +202,41 @@ const App = () => {
   }
 
   return (
-    <NavigationContainer>
-      <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
-      <Stack.Navigator
-        initialRouteName={initialRoute}
-        screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: '#EBF4F7' },
-          animation: 'slide_from_right',
-        }}
-      >
-        {/* ── Public Screens (no login required) ── */}
-        <Stack.Screen name="Onboarding" component={OnboardingScreen} />
-        <Stack.Screen
-          name="EmergencyAccess"
-          component={EmergencyAccessScreen}
-          options={{ animation: 'slide_from_bottom' }}
-        />
+    <ErrorBoundary>
+      <NavigationContainer>
+        <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+        <Stack.Navigator
+          initialRouteName={initialRoute}
+          screenOptions={{
+            headerShown: false,
+            contentStyle: { backgroundColor: '#EBF4F7' },
+            animation: 'slide_from_right',
+          }}
+        >
+          {/* ── Public Screens (no login required) ── */}
+          <Stack.Screen name="Onboarding" component={OnboardingScreen} />
+          <Stack.Screen
+            name="EmergencyAccess"
+            component={EmergencyAccessScreen}
+            options={{ animation: 'slide_from_bottom' }}
+          />
 
-        {/* ── Auth Screens ── */}
-        <Stack.Screen name="Login" component={LoginScreen} />
-        <Stack.Screen name="Signup" component={SignupScreen} />
+          {/* ── Auth Screens ── */}
+          <Stack.Screen name="Login" component={LoginScreen} />
+          <Stack.Screen name="Signup" component={SignupScreen} />
 
-        {/* ── Post-signup landing ── */}
-        <Stack.Screen name="Welcome" component={WelcomeScreen} />
+          {/* ── Post-signup landing ── */}
+          <Stack.Screen name="Welcome" component={WelcomeScreen} />
 
-        {/* ── Authenticated Screens ── */}
-        {/* FIX: Pass autoLoginUser via initialParams at render time (resolved value). */}
-        {/* Stack.Screen initialParams is evaluated when the navigator renders,        */}
-        {/* so using the resolved state here correctly passes user data to HomeScreen. */}
-        <Stack.Screen
-          name="Home"
-          component={HomeScreen}
-          initialParams={autoLoginUser ? { user: autoLoginUser } : undefined}
-        />
-      </Stack.Navigator>
-    </NavigationContainer>
+          {/* ── Authenticated Screens ── */}
+          <Stack.Screen
+            name="Home"
+            component={HomeScreen}
+            initialParams={autoLoginUser ? { user: autoLoginUser } : undefined}
+          />
+        </Stack.Navigator>
+      </NavigationContainer>
+    </ErrorBoundary>
   );
 };
 

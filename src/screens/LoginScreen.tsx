@@ -93,7 +93,7 @@ interface Props {
 }
 
 const LoginScreen: React.FC<Props> = ({ navigation }) => {
-  const [email, setEmail] = useState('');
+  const [emailOrPhone, setEmailOrPhone] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -106,15 +106,15 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
     setError('');
     setSuccess(false);
 
-    if (!email.trim() || !password) {
-      setError('Please enter both email and password');
+    if (!emailOrPhone.trim() || !password) {
+      setError('Please enter your email/phone and password');
       return;
     }
 
     setLoading(true);
 
     try {
-      const result = await authService.login(email.trim(), password);
+      const result = await authService.login(emailOrPhone.trim(), password);
 
       if (!result.success) {
         setError(result.error || 'Login failed');
@@ -167,18 +167,18 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
           <Text style={styles.subtitle}>Sign in to your SafeConnect account</Text>
         </Animated.View>
 
-        {/* ── Email Input ── */}
+        {/* ── Email/Phone Input ── */}
         <Animated.View entering={FadeInUp.duration(500).delay(240)} style={styles.formGroup}>
-          <Text style={styles.label}>Email Address</Text>
+          <Text style={styles.label}>Email or Phone Number</Text>
           <View style={[styles.inputWrapper, emailFocused && styles.inputWrapperFocused]}>
             <MailIcon />
             <TextInput
               style={styles.input}
-              placeholder="Enter your email"
+              placeholder="Enter your email or phone number"
               placeholderTextColor={COLORS.muted}
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
+              value={emailOrPhone}
+              onChangeText={setEmailOrPhone}
+              keyboardType="default"
               autoCapitalize="none"
               autoCorrect={false}
               editable={!loading}

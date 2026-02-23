@@ -10,16 +10,18 @@
  *    Logout: clears AsyncStorage session → navigates to Onboarding (reset stack)
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     Alert,
     Dimensions,
+    Linking,
     Modal,
     PermissionsAndroid,
     Platform,
     ScrollView,
     StyleSheet,
     TouchableOpacity,
+    Vibration,
     View,
 } from 'react-native';
 import { Text } from 'react-native-paper';
@@ -35,7 +37,9 @@ import Animated, {
     withTiming,
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import Svg, { Circle, Defs, Line, Path, RadialGradient, Stop } from 'react-native-svg';
+import Svg, { Circle, Defs, Line, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
+import { locationService } from '../services/location';
+import LocationSharingModal from './LocationSharingModal_v2';
 
 const { width } = Dimensions.get('window');
 
@@ -153,6 +157,43 @@ const LogoutIcon: React.FC = () => (
     <Svg width="20" height="20" viewBox="0 0 24 24" fill="none">
         <Path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" stroke={COLORS.red} strokeWidth="1.8" strokeLinecap="round" />
         <Path d="M16 17l5-5-5-5M21 12H9" stroke={COLORS.red} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+);
+
+// ─── Emergency Mode Icons ─────────────────────────────────────────
+const EmergencyIcon: React.FC<{ color?: string; size?: number }> = ({ color = COLORS.red, size = 22 }) => (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+        <Path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" stroke={color} strokeWidth="1.8" fill="none" />
+        <Path d="M12 8v4M12 16h.01" stroke={color} strokeWidth="2.5" strokeLinecap="round" />
+    </Svg>
+);
+
+const PhoneCallIcon: React.FC<{ color?: string; size?: number }> = ({ color = COLORS.blue, size = 20 }) => (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+        <Path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6A19.79 19.79 0 012.12 4.18 2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z" stroke={color} strokeWidth="1.8" fill="none" />
+    </Svg>
+);
+
+const AmbulanceIcon: React.FC<{ color?: string; size?: number }> = ({ color = COLORS.red, size = 20 }) => (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+        <Rect x="1" y="10" width="22" height="9" rx="2" stroke={color} strokeWidth="1.8" fill="none" />
+        <Path d="M1 14h22M7 19v2M17 19v2M5 10V6a2 2 0 012-2h4l3 6" stroke={color} strokeWidth="1.5" strokeLinecap="round" />
+        <Path d="M13 6h3l2 4" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        <Path d="M10 6v4M8 8h4" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
+    </Svg>
+);
+
+const FireIcon: React.FC<{ color?: string; size?: number }> = ({ color = COLORS.amber, size = 20 }) => (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+        <Path d="M12 23c-4.97 0-9-2.69-9-6 0-2.5 1.5-4.5 3-6 .5-.5 1.5-1 2-2 1 2 2 3 3 3s2-1 2-3c2 3 5 5 5 8 0 3.31-2.69 6-6 6z" stroke={color} strokeWidth="1.8" fill="none" />
+        <Path d="M12 23c-1.66 0-3-1.12-3-2.5S10.34 17 12 17s3 2.12 3 3.5S13.66 23 12 23z" stroke={color} strokeWidth="1.5" fill="none" />
+    </Svg>
+);
+
+const LiveLocationPinIcon: React.FC<{ color?: string; size?: number }> = ({ color = COLORS.orange, size = 18 }) => (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+        <Path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" fill={color} opacity={0.15} stroke={color} strokeWidth="1.8" />
+        <Circle cx="12" cy="9" r="2.5" fill={color} />
     </Svg>
 );
 
@@ -279,6 +320,41 @@ const NodeCard: React.FC<NodeCardProps> = ({ name, distance, signal, status }) =
         </View>
     </View>
 );
+
+// ─── Contact Card ───────────────────────────────────────────────
+interface ContactCardProps {
+    name: string;
+    relationship: string;
+    phone: string;
+}
+const ContactCard: React.FC<ContactCardProps> = ({ name, relationship, phone }) => {
+    const initials = name
+        .split(' ')
+        .map(part => part.charAt(0))
+        .join('')
+        .slice(0, 2)
+        .toUpperCase();
+
+    return (
+        <View style={styles.contactRow}>
+            <View style={styles.contactLeft}>
+                <View style={styles.contactAvatar}>
+                    <Text style={styles.contactAvatarText}>{initials}</Text>
+                </View>
+                <View>
+                    <Text style={styles.contactName}>{name}</Text>
+                    <Text style={styles.contactMeta}>{relationship}</Text>
+                </View>
+            </View>
+            <View style={styles.contactRight}>
+                <Text style={styles.contactPhone}>{phone}</Text>
+                <View style={styles.contactAction}>
+                    <Text style={styles.contactActionText}>Call</Text>
+                </View>
+            </View>
+        </View>
+    );
+};
 
 // ─── Alert Card ───────────────────────────────────────────────────
 interface AlertCardProps {
@@ -521,25 +597,111 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
     const [activeTab, setActiveTab] = useState('home');
     const [showPermModal, setShowPermModal] = useState(false);
     const [showProfile, setShowProfile] = useState(false);
+    const [showLocationSharing, setShowLocationSharing] = useState(false);
+    const [activeFeature, setActiveFeature] = useState<'nodes' | 'contacts' | 'alerts' | null>('contacts');
+    const [emergencyMode, setEmergencyMode] = useState(false);
+    const [liveLocation, setLiveLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+    const [liveAddress, setLiveAddress] = useState<string>('Fetching location...');
 
     // ── Request permissions on entry (only if not already granted) ──
     useEffect(() => {
         if (Platform.OS !== 'android') return;
-        const checkAndShowModal = async () => {
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        let cancelled = false;
+
+        (async () => {
             try {
                 const locGranted = await PermissionsAndroid.check(
                     PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
                 );
-                if (!locGranted) {
-                    const timer = setTimeout(() => setShowPermModal(true), 800);
-                    return () => clearTimeout(timer);
+                if (!locGranted && !cancelled) {
+                    timer = setTimeout(() => setShowPermModal(true), 800);
                 }
             } catch {
                 // If check fails, don't show modal
             }
+        })();
+
+        return () => {
+            cancelled = true;
+            if (timer) clearTimeout(timer);
         };
-        checkAndShowModal();
     }, []);
+
+    // ── Live Location (fetches once, refreshes quietly every 60 s) ──
+    const isFetchingRef = useRef(false);
+
+    const fetchLiveLocation = useCallback(async () => {
+        if (isFetchingRef.current) return;   // skip if already in-flight
+        isFetchingRef.current = true;
+        try {
+            const hasPermission = await locationService.checkLocationPermission();
+            if (!hasPermission) {
+                setLiveAddress('Location permission not granted');
+                return;
+            }
+            const loc = await locationService.getCurrentLocation();
+            if (loc) {
+                setLiveLocation({ latitude: loc.latitude, longitude: loc.longitude });
+                const addr = await locationService.getAddressFromCoordinates(loc.latitude, loc.longitude);
+                setLiveAddress(addr || `${loc.latitude.toFixed(5)}, ${loc.longitude.toFixed(5)}`);
+            }
+        } catch {
+            setLiveAddress('Unable to fetch location');
+        } finally {
+            isFetchingRef.current = false;
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchLiveLocation();
+        const interval = setInterval(fetchLiveLocation, 60_000); // refresh every 60 s
+        return () => clearInterval(interval);
+    }, [fetchLiveLocation]);
+
+    // ── Emergency Mode ──
+    const toggleEmergencyMode = () => {
+        if (!emergencyMode) {
+            Alert.alert(
+                '🚨 Activate Emergency Mode',
+                'This will alert your emergency contacts and enable all safety features. Continue?',
+                [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                        text: 'Activate',
+                        style: 'destructive',
+                        onPress: () => {
+                            setEmergencyMode(true);
+                            Vibration.vibrate([0, 200, 100, 200]);
+                        },
+                    },
+                ]
+            );
+        } else {
+            Alert.alert(
+                'Deactivate Emergency Mode',
+                'Are you sure you want to turn off emergency mode?',
+                [
+                    { text: 'Keep Active', style: 'cancel' },
+                    {
+                        text: 'Deactivate',
+                        onPress: () => setEmergencyMode(false),
+                    },
+                ]
+            );
+        }
+    };
+
+    const callEmergencyService = (service: string, number: string) => {
+        Alert.alert(
+            `Call ${service}`,
+            `Dial ${number}?`,
+            [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Call', onPress: () => Linking.openURL(`tel:${number}`) },
+            ]
+        );
+    };
 
     const requestAllPermissions = async () => {
         setShowPermModal(false);
@@ -556,7 +718,7 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                 ...(Platform.Version >= 33 ? [PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES] : []),
             ]);
         } catch (err) {
-            console.warn('Permission request error:', err);
+            // Permission request errors are non-critical
         }
     };
 
@@ -575,8 +737,8 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                         try {
                             // Clear the current user session from AsyncStorage
                             await AsyncStorage.removeItem('safeconnect_currentUser');
-                        } catch (e) {
-                            console.warn('Logout storage error:', e);
+                        } catch {
+                            // Ignore storage error during logout
                         }
                         // Navigate to Onboarding and reset the entire stack
                         // so the back button doesn't return to Home
@@ -587,6 +749,15 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                     },
                 },
             ]
+        );
+    };
+
+    const handleLocationShare = (duration: number) => {
+        const durationText = duration === -1 ? 'continuous' : `${duration} minutes`;
+        Alert.alert(
+            '✅ Location Shared!',
+            `Your location is now being shared for ${durationText}.\n\nYour trusted contacts can see your real-time location.`,
+            [{ text: 'OK' }]
         );
     };
 
@@ -604,6 +775,12 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
         { name: 'Node Delta', distance: '2.1 km', signal: 0, status: 'offline' as const },
     ];
 
+    const contacts = [
+        { name: 'Aarav Kumar', relationship: 'Brother', phone: '98765 43210' },
+        { name: 'Meera Singh', relationship: 'Friend', phone: '98760 11223' },
+        { name: 'Dr. Ananya Rao', relationship: 'Doctor', phone: '98811 22334' },
+    ];
+
     const communityAlerts = [
         { type: 'danger' as const, title: 'Road Blocked', message: 'MG Road near station — avoid area', time: '5m ago' },
         { type: 'warning' as const, title: 'Power Outage', message: 'Sector 4 experiencing outage', time: '22m ago' },
@@ -618,6 +795,14 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                 visible={showPermModal}
                 onAllow={requestAllPermissions}
                 onDismiss={() => setShowPermModal(false)}
+            />
+
+            {/* ── Location Sharing Modal ── */}
+            <LocationSharingModal
+                visible={showLocationSharing}
+                userName={userName}
+                onClose={() => setShowLocationSharing(false)}
+                onShare={handleLocationShare}
             />
 
             {/* ── Profile Sheet ── */}
@@ -661,37 +846,86 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
 
             <ScrollView showsVerticalScrollIndicator={false} style={styles.scroll} contentContainerStyle={styles.scrollContent}>
 
-                {/* ── Safety Status Card ── */}
+                {/* ── Emergency Mode Card ── */}
                 <Animated.View entering={FadeInUp.duration(500).delay(80)}>
-                    <View style={styles.statusCard}>
-                        <View style={styles.statusLeft}>
-                            <View style={styles.statusBadge}>
-                                <PulseDot color={COLORS.green} />
-                                <Text style={styles.statusBadgeText}>SAFE</Text>
-                            </View>
-                            <Text style={styles.statusTitle}>You're Protected</Text>
-                            <Text style={styles.statusSubtitle}>Mesh network active · 14 nodes nearby</Text>
-                            <View style={styles.statusStats}>
-                                <View style={styles.statItem}>
-                                    <Text style={styles.statValue}>14</Text>
-                                    <Text style={styles.statLabel}>Nodes</Text>
+                    <View style={[styles.emergencyCard, emergencyMode && styles.emergencyCardActive]}>
+                        <View style={styles.emergencyHeader}>
+                            <View style={styles.emergencyHeaderLeft}>
+                                <View style={[styles.emergencyIconWrap, emergencyMode && styles.emergencyIconWrapActive]}>
+                                    <EmergencyIcon color={emergencyMode ? COLORS.white : COLORS.red} size={24} />
                                 </View>
-                                <View style={styles.statDivider} />
-                                <View style={styles.statItem}>
-                                    <Text style={styles.statValue}>3.2km</Text>
-                                    <Text style={styles.statLabel}>Range</Text>
-                                </View>
-                                <View style={styles.statDivider} />
-                                <View style={styles.statItem}>
-                                    <Text style={styles.statValue}>98%</Text>
-                                    <Text style={styles.statLabel}>Uptime</Text>
+                                <View>
+                                    <Text style={[styles.emergencyTitle, emergencyMode && styles.emergencyTitleActive]}>
+                                        {emergencyMode ? 'Emergency Active' : 'Emergency Mode'}
+                                    </Text>
+                                    <Text style={[styles.emergencySubtitle, emergencyMode && styles.emergencySubtitleActive]}>
+                                        {emergencyMode ? 'Contacts alerted · Services ready' : 'Activate for instant safety'}
+                                    </Text>
                                 </View>
                             </View>
+                            <TouchableOpacity
+                                style={[styles.emergencyToggle, emergencyMode && styles.emergencyToggleActive]}
+                                onPress={toggleEmergencyMode}
+                                activeOpacity={0.8}
+                            >
+                                <Text style={[styles.emergencyToggleText, emergencyMode && styles.emergencyToggleTextActive]}>
+                                    {emergencyMode ? 'ACTIVE' : 'ACTIVATE'}
+                                </Text>
+                            </TouchableOpacity>
                         </View>
-                        <View style={styles.statusRight}>
-                            <MeshStatusWidget />
+
+                        {/* Emergency Services */}
+                        <View style={styles.emergencyServices}>
+                            <TouchableOpacity
+                                style={[styles.emergencyServiceBtn, { backgroundColor: COLORS.blueLight, borderColor: COLORS.blue }]}
+                                onPress={() => callEmergencyService('Police', '100')}
+                                activeOpacity={0.75}
+                            >
+                                <PhoneCallIcon color={COLORS.blue} size={18} />
+                                <Text style={[styles.emergencyServiceLabel, { color: COLORS.blue }]}>Police</Text>
+                                <Text style={[styles.emergencyServiceNum, { color: COLORS.blue }]}>100</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.emergencyServiceBtn, { backgroundColor: COLORS.redLight, borderColor: COLORS.red }]}
+                                onPress={() => callEmergencyService('Ambulance', '108')}
+                                activeOpacity={0.75}
+                            >
+                                <AmbulanceIcon color={COLORS.red} size={18} />
+                                <Text style={[styles.emergencyServiceLabel, { color: COLORS.red }]}>Ambulance</Text>
+                                <Text style={[styles.emergencyServiceNum, { color: COLORS.red }]}>108</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.emergencyServiceBtn, { backgroundColor: COLORS.amberLight, borderColor: COLORS.amber }]}
+                                onPress={() => callEmergencyService('Fire', '101')}
+                                activeOpacity={0.75}
+                            >
+                                <FireIcon color={COLORS.amber} size={18} />
+                                <Text style={[styles.emergencyServiceLabel, { color: COLORS.amber }]}>Fire</Text>
+                                <Text style={[styles.emergencyServiceNum, { color: COLORS.amber }]}>101</Text>
+                            </TouchableOpacity>
                         </View>
                     </View>
+                </Animated.View>
+
+                {/* ── Live Location Section ── */}
+                <Animated.View entering={FadeInUp.duration(500).delay(130)}>
+                    <TouchableOpacity style={styles.liveLocationCard} onPress={fetchLiveLocation} activeOpacity={0.8}>
+                        <View style={styles.liveLocationLeft}>
+                            <View style={styles.liveLocationIconWrap}>
+                                <LiveLocationPinIcon color={COLORS.orange} size={18} />
+                            </View>
+                            <View style={styles.liveLocationText}>
+                                <View style={styles.liveLocationHeader}>
+                                    <PulseDot color={COLORS.green} />
+                                    <Text style={styles.liveLocationLabel}>Live Location</Text>
+                                </View>
+                                <Text style={styles.liveLocationAddress} numberOfLines={1}>
+                                    {liveAddress}
+                                </Text>
+                            </View>
+                        </View>
+                        <ChevronIcon color={COLORS.muted} />
+                    </TouchableOpacity>
                 </Animated.View>
 
                 {/* ── Quick Actions ── */}
@@ -712,7 +946,7 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                             sublabel="Live tracking"
                             bgColor={COLORS.orangeLight}
                             borderColor={COLORS.orange}
-                            onPress={() => { }}
+                            onPress={() => setShowLocationSharing(true)}
                         />
                         <QuickAction
                             icon={<MeshIcon color={COLORS.blue} />}
@@ -733,36 +967,83 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                     </View>
                 </Animated.View>
 
-                {/* ── Nearby Mesh Nodes ── */}
-                <Animated.View entering={FadeInUp.duration(500).delay(280)}>
-                    <View style={styles.sectionHeader}>
-                        <Text style={styles.sectionTitle}>Nearby Nodes</Text>
-                        <TouchableOpacity activeOpacity={0.7}>
-                            <Text style={styles.seeAll}>See all →</Text>
-                        </TouchableOpacity>
-                    </View>
-                    <View style={styles.nodesCard}>
-                        {nearbyNodes.map((node, i) => (
-                            <View key={node.name}>
-                                <NodeCard {...node} />
-                                {i < nearbyNodes.length - 1 && <View style={styles.nodeDivider} />}
-                            </View>
-                        ))}
+                {/* ── Feature Tabs ── */}
+                <Animated.View entering={FadeInUp.duration(500).delay(260)}>
+                    <View style={styles.featureTabsRow}>
+                        {[
+                            { id: 'contacts' as const, label: 'Contacts' },
+                            { id: 'nodes' as const, label: 'Nearby Nodes' },
+                            { id: 'alerts' as const, label: 'Community Alerts' },
+                        ].map(tab => {
+                            const isActive = activeFeature === tab.id;
+                            return (
+                                <TouchableOpacity
+                                    key={tab.id}
+                                    style={[styles.featureTab, isActive && styles.featureTabActive]}
+                                    onPress={() => setActiveFeature(isActive ? null : tab.id)}
+                                    activeOpacity={0.75}
+                                >
+                                    <Text style={[styles.featureTabText, isActive && styles.featureTabTextActive]}>
+                                        {tab.label}
+                                    </Text>
+                                </TouchableOpacity>
+                            );
+                        })}
                     </View>
                 </Animated.View>
 
-                {/* ── Community Alerts ── */}
-                <Animated.View entering={FadeInUp.duration(500).delay(380)} style={{ marginBottom: 24 }}>
-                    <View style={styles.sectionHeader}>
-                        <Text style={styles.sectionTitle}>Community Alerts</Text>
-                        <TouchableOpacity activeOpacity={0.7}>
-                            <Text style={styles.seeAll}>See all →</Text>
-                        </TouchableOpacity>
-                    </View>
-                    {communityAlerts.map((alert, i) => (
-                        <AlertCard key={i} {...alert} />
-                    ))}
-                </Animated.View>
+                {/* ── Feature Panels ── */}
+                {activeFeature === 'nodes' && (
+                    <Animated.View entering={FadeInUp.duration(350)}>
+                        <View style={styles.sectionHeader}>
+                            <Text style={styles.sectionTitle}>Nearby Nodes</Text>
+                            <TouchableOpacity activeOpacity={0.7}>
+                                <Text style={styles.seeAll}>See all →</Text>
+                            </TouchableOpacity>
+                        </View>
+                        <View style={styles.nodesCard}>
+                            {nearbyNodes.map((node, i) => (
+                                <View key={node.name}>
+                                    <NodeCard {...node} />
+                                    {i < nearbyNodes.length - 1 && <View style={styles.nodeDivider} />}
+                                </View>
+                            ))}
+                        </View>
+                    </Animated.View>
+                )}
+
+                {activeFeature === 'contacts' && (
+                    <Animated.View entering={FadeInUp.duration(350)}>
+                        <View style={styles.sectionHeader}>
+                            <Text style={styles.sectionTitle}>Contacts</Text>
+                            <TouchableOpacity activeOpacity={0.7}>
+                                <Text style={styles.seeAll}>See all →</Text>
+                            </TouchableOpacity>
+                        </View>
+                        <View style={styles.contactsCard}>
+                            {contacts.map((contact, i) => (
+                                <View key={contact.name}>
+                                    <ContactCard {...contact} />
+                                    {i < contacts.length - 1 && <View style={styles.nodeDivider} />}
+                                </View>
+                            ))}
+                        </View>
+                    </Animated.View>
+                )}
+
+                {activeFeature === 'alerts' && (
+                    <Animated.View entering={FadeInUp.duration(350)} style={{ marginBottom: 24 }}>
+                        <View style={styles.sectionHeader}>
+                            <Text style={styles.sectionTitle}>Community Alerts</Text>
+                            <TouchableOpacity activeOpacity={0.7}>
+                                <Text style={styles.seeAll}>See all →</Text>
+                            </TouchableOpacity>
+                        </View>
+                        {communityAlerts.map((alert, i) => (
+                            <AlertCard key={i} {...alert} />
+                        ))}
+                    </Animated.View>
+                )}
 
             </ScrollView>
 
@@ -963,34 +1244,84 @@ const styles = StyleSheet.create({
     scroll: { flex: 1 },
     scrollContent: { paddingHorizontal: 18, paddingBottom: 20 },
 
-    // Status Card
-    statusCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.cardBg, borderWidth: 1.5, borderColor: COLORS.greenBorder, borderRadius: 20, padding: 18, marginBottom: 22, shadowColor: COLORS.green, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 3 },
-    statusLeft: { flex: 1 },
-    statusBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: COLORS.greenLight, borderWidth: 1, borderColor: COLORS.greenBorder, borderRadius: 100, paddingVertical: 4, paddingHorizontal: 10, alignSelf: 'flex-start', marginBottom: 10 },
-    statusBadgeText: { fontSize: 10, fontWeight: '800', color: COLORS.green, letterSpacing: 1 },
-    statusTitle: { fontSize: 20, fontWeight: '900', color: COLORS.brown, letterSpacing: -0.5, marginBottom: 3 },
-    statusSubtitle: { fontSize: 11, fontWeight: '500', color: COLORS.muted, marginBottom: 14 },
-    statusStats: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-    statItem: { alignItems: 'center' },
-    statValue: { fontSize: 16, fontWeight: '800', color: COLORS.brown, letterSpacing: -0.3 },
-    statLabel: { fontSize: 10, fontWeight: '500', color: COLORS.muted },
+    // Emergency Mode Card
+    emergencyCard: {
+        backgroundColor: COLORS.cardBg, borderWidth: 1.5, borderColor: 'rgba(211,47,47,0.20)',
+        borderRadius: 20, padding: 16, marginBottom: 14,
+        shadowColor: COLORS.red, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.06, shadowRadius: 12, elevation: 3,
+    },
+    emergencyCardActive: {
+        backgroundColor: 'rgba(211,47,47,0.06)', borderColor: COLORS.red,
+        shadowOpacity: 0.15,
+    },
+    emergencyHeader: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14,
+    },
+    emergencyHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+    emergencyIconWrap: {
+        width: 44, height: 44, borderRadius: 14, backgroundColor: COLORS.redLight,
+        alignItems: 'center', justifyContent: 'center',
+    },
+    emergencyIconWrapActive: { backgroundColor: COLORS.red },
+    emergencyTitle: { fontSize: 16, fontWeight: '800', color: COLORS.brown, letterSpacing: -0.3 },
+    emergencyTitleActive: { color: COLORS.red },
+    emergencySubtitle: { fontSize: 11, fontWeight: '500', color: COLORS.muted, marginTop: 1 },
+    emergencySubtitleActive: { color: COLORS.red },
+    emergencyToggle: {
+        backgroundColor: COLORS.redLight, borderWidth: 1.5, borderColor: COLORS.red,
+        borderRadius: 100, paddingVertical: 8, paddingHorizontal: 16,
+    },
+    emergencyToggleActive: { backgroundColor: COLORS.red },
+    emergencyToggleText: { fontSize: 11, fontWeight: '800', color: COLORS.red, letterSpacing: 0.8 },
+    emergencyToggleTextActive: { color: COLORS.white },
+    emergencyServices: { flexDirection: 'row', gap: 8 },
+    emergencyServiceBtn: {
+        flex: 1, borderWidth: 1.5, borderRadius: 14, paddingVertical: 10,
+        alignItems: 'center', gap: 4,
+    },
+    emergencyServiceLabel: { fontSize: 11, fontWeight: '700', letterSpacing: -0.2 },
+    emergencyServiceNum: { fontSize: 10, fontWeight: '600', opacity: 0.7 },
+
+    // Live Location Card
+    liveLocationCard: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+        backgroundColor: COLORS.cardBg, borderWidth: 1, borderColor: COLORS.cardBorder,
+        borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 22,
+    },
+    liveLocationLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+    liveLocationIconWrap: {
+        width: 36, height: 36, borderRadius: 10, backgroundColor: COLORS.orangeLight,
+        alignItems: 'center', justifyContent: 'center',
+    },
+    liveLocationText: { flex: 1 },
+    liveLocationHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
+    liveLocationLabel: { fontSize: 12, fontWeight: '700', color: COLORS.brown, letterSpacing: -0.2 },
+    liveLocationAddress: { fontSize: 11, fontWeight: '500', color: COLORS.muted, lineHeight: 15 },
+
+    // Legacy (kept for compat)
     statDivider: { width: 1, height: 24, backgroundColor: 'rgba(44,26,14,0.10)' },
-    statusRight: { marginLeft: 8 },
 
     // Section
-    sectionTitle: { fontSize: 18, fontWeight: '800', color: COLORS.brown, letterSpacing: -0.4, marginBottom: 12 },
-    sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
+    sectionTitle: { fontSize: 18, fontWeight: '800', color: COLORS.brown, letterSpacing: -0.4, marginBottom: 14 },
+    sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
     seeAll: { fontSize: 12, fontWeight: '600', color: COLORS.orange, letterSpacing: 0.1 },
 
+    // Feature Tabs
+    featureTabsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 16 },
+    featureTab: { flex: 1, backgroundColor: COLORS.cardBg, borderWidth: 1, borderColor: COLORS.cardBorder, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 8, alignItems: 'center' },
+    featureTabActive: { borderColor: COLORS.orange, backgroundColor: COLORS.orangeLight },
+    featureTabText: { fontSize: 11, fontWeight: '700', color: COLORS.brown, letterSpacing: -0.2, textAlign: 'center' },
+    featureTabTextActive: { color: COLORS.orange },
+
     // Quick Actions
-    quickActionsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 22 },
-    quickAction: { width: (width - 36 - 10) / 2, borderWidth: 1.5, borderRadius: 16, padding: 14, gap: 6 },
-    quickActionIcon: { width: 40, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
-    quickActionLabel: { fontSize: 14, fontWeight: '700', color: COLORS.brown, letterSpacing: -0.2 },
-    quickActionSub: { fontSize: 11, fontWeight: '500', color: COLORS.muted },
+    quickActionsGrid: { flexDirection: 'row', flexWrap: 'nowrap', justifyContent: 'space-between', gap: 6, marginBottom: 24 },
+    quickAction: { width: (width - 36 - 18) / 4, borderWidth: 1.5, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 8, gap: 4, alignItems: 'center' },
+    quickActionIcon: { width: 30, height: 30, borderRadius: 9, alignItems: 'center', justifyContent: 'center', marginBottom: 2 },
+    quickActionLabel: { fontSize: 10.5, fontWeight: '700', color: COLORS.brown, letterSpacing: -0.2, textAlign: 'center' },
+    quickActionSub: { fontSize: 9, fontWeight: '500', color: COLORS.muted, textAlign: 'center' },
 
     // Nodes
-    nodesCard: { backgroundColor: COLORS.cardBg, borderWidth: 1, borderColor: COLORS.cardBorder, borderRadius: 18, overflow: 'hidden', marginBottom: 22 },
+    nodesCard: { backgroundColor: COLORS.cardBg, borderWidth: 1, borderColor: COLORS.cardBorder, borderRadius: 18, overflow: 'hidden', marginBottom: 32 },
     nodeCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 12 },
     nodeLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
     nodeAvatar: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
@@ -1001,6 +1332,19 @@ const styles = StyleSheet.create({
     signalBar: { width: 4, borderRadius: 2 },
     statusDot: { width: 8, height: 8, borderRadius: 4 },
     nodeDivider: { height: 1, backgroundColor: 'rgba(44,26,14,0.06)', marginHorizontal: 14 },
+
+    // Contacts
+    contactsCard: { backgroundColor: COLORS.cardBg, borderWidth: 1, borderColor: COLORS.cardBorder, borderRadius: 18, overflow: 'hidden', marginBottom: 32 },
+    contactRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 12 },
+    contactLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    contactAvatar: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.greenLight },
+    contactAvatarText: { fontSize: 12, fontWeight: '800', color: COLORS.green },
+    contactName: { fontSize: 13, fontWeight: '700', color: COLORS.brown, letterSpacing: -0.2 },
+    contactMeta: { fontSize: 11, fontWeight: '500', color: COLORS.muted },
+    contactRight: { alignItems: 'flex-end', gap: 6 },
+    contactPhone: { fontSize: 11, fontWeight: '600', color: COLORS.brownMid },
+    contactAction: { backgroundColor: COLORS.orangeLight, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 4 },
+    contactActionText: { fontSize: 10, fontWeight: '700', color: COLORS.orange },
 
     // Alerts
     alertCard: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, borderLeftWidth: 3, borderRadius: 12, padding: 12, marginBottom: 8 },
