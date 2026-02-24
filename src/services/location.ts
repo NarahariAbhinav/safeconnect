@@ -10,7 +10,7 @@ interface LocationCoordinates {
   timestamp: number;
 }
 
-interface LocationSharingData {
+export interface LocationSharingData {
   userId: string;
   userName: string;
   coordinates: LocationCoordinates;
@@ -22,18 +22,9 @@ interface LocationSharingData {
 // ─── Google Maps API key (for fast reverse geocoding) ─────────────
 // Replace with your own key from https://console.cloud.google.com
 // Enable "Geocoding API" in the Google Cloud Console
-const GOOGLE_MAPS_API_KEY = ''; // <-- paste your key here
+const GOOGLE_MAPS_API_KEY = 'AIzaSyAg6z7fFTWTRvw6nbA99fvTJLZWiFxsRbo';
 
-// Mock location for testing (fallback)
-const MOCK_LOCATION: LocationCoordinates = {
-  latitude: 28.6139,
-  longitude: 77.2090,
-  accuracy: 50,
-  altitude: 216,
-  heading: 0,
-  speed: 0,
-  timestamp: Date.now(),
-};
+// (MOCK_LOCATION removed — callers now receive null when GPS is unavailable)
 
 // ─── Address cache to avoid repeated geocoding ───────────────────
 let _addressCache: {
@@ -154,7 +145,7 @@ export const locationService = {
           timeInterval: 5000,    // every 5 s
           distanceInterval: 15,  // or 15 m moved
         },
-        location => callback(toCoords(location)),
+        (location: Location.LocationObject) => callback(toCoords(location)),
       );
     } catch (error) {
       errorCallback?.(error as Error);
@@ -226,7 +217,9 @@ export const locationService = {
       const results = await Location.reverseGeocodeAsync({ latitude, longitude });
       if (results.length > 0) {
         const a = results[0];
-        const addr = [a.street, a.city, a.region, a.country].filter(Boolean).join(', ');
+        const addr = [a.street, a.city, a.region, a.country]
+          .filter((x): x is string => typeof x === 'string' && x.length > 0)
+          .join(', ');
         if (addr) return saveCache(addr);
       }
     } catch { /* ignore */ }
@@ -247,9 +240,9 @@ export const locationService = {
     const a =
       Math.sin(dLat / 2) * Math.sin(dLat / 2) +
       Math.cos((lat1 * Math.PI) / 180) *
-        Math.cos((lat2 * Math.PI) / 180) *
-        Math.sin(dLon / 2) *
-        Math.sin(dLon / 2);
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
   },
@@ -260,4 +253,5 @@ export const locationService = {
   },
 };
 
-export type { LocationCoordinates, LocationSharingData };
+export type { LocationCoordinates };
+

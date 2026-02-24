@@ -10,6 +10,7 @@
  *    Logout: clears AsyncStorage session → navigates to Onboarding (reset stack)
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFocusEffect } from '@react-navigation/native';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     Alert,
@@ -38,6 +39,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Circle, Defs, Line, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
+import { TrustedContact, contactsService } from '../services/contacts';
 import { locationService } from '../services/location';
 import LocationSharingModal from './LocationSharingModal_v2';
 
@@ -598,34 +600,25 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
     const [showPermModal, setShowPermModal] = useState(false);
     const [showProfile, setShowProfile] = useState(false);
     const [showLocationSharing, setShowLocationSharing] = useState(false);
+    const [showContactPicker, setShowContactPicker] = useState(false);
+    const [selectedContacts, setSelectedContacts] = useState<string[]>([]);
     const [activeFeature, setActiveFeature] = useState<'nodes' | 'contacts' | 'alerts' | null>('contacts');
     const [emergencyMode, setEmergencyMode] = useState(false);
     const [liveLocation, setLiveLocation] = useState<{ latitude: number; longitude: number } | null>(null);
     const [liveAddress, setLiveAddress] = useState<string>('Fetching location...');
+    const [trustedContacts, setTrustedContacts] = useState<TrustedContact[]>([]);
 
-    // ── Request permissions on entry (only if not already granted) ──
+    // ── Load real trusted contacts; refresh whenever screen is focused ──
+    useFocusEffect(
+        useCallback(() => {
+            contactsService.getTrusted().then(setTrustedContacts);
+        }, [])
+    );
+
+    // ── Always show permission modal on every HomeScreen open ──
     useEffect(() => {
-        if (Platform.OS !== 'android') return;
-        let timer: ReturnType<typeof setTimeout> | null = null;
-        let cancelled = false;
-
-        (async () => {
-            try {
-                const locGranted = await PermissionsAndroid.check(
-                    PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
-                );
-                if (!locGranted && !cancelled) {
-                    timer = setTimeout(() => setShowPermModal(true), 800);
-                }
-            } catch {
-                // If check fails, don't show modal
-            }
-        })();
-
-        return () => {
-            cancelled = true;
-            if (timer) clearTimeout(timer);
-        };
+        const timer = setTimeout(() => setShowPermModal(true), 600);
+        return () => clearTimeout(timer);
     }, []);
 
     // ── Live Location (fetches once, refreshes quietly every 60 s) ──
@@ -705,21 +698,66 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
 
     const requestAllPermissions = async () => {
         setShowPermModal(false);
-        if (Platform.OS !== 'android') return;
-        try {
-            await PermissionsAndroid.requestMultiple([
-                PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-                PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
-                ...(Platform.Version >= 31 ? [
-                    PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-                    PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-                    PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
-                ] : []),
-                ...(Platform.Version >= 33 ? [PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES] : []),
-            ]);
-        } catch (err) {
-            // Permission request errors are non-critical
+
+        // ── Step 1: Grant runtime permissions (Android only) ──────────
+        if (Platform.OS === 'android') {
+            try {
+                await PermissionsAndroid.requestMultiple([
+                    PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+                    PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+                    ...(Platform.Version >= 31 ? [
+                        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+                        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+                        PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
+                    ] : []),
+                    ...(Platform.Version >= 33 ? [PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES] : []),
+                ]);
+            } catch {
+                // Permission request errors are non-critical
+            }
         }
+
+        // ── Step 2: Actually turn ON Bluetooth ────────────────────────
+        // Runtime permissions only allow the app to USE Bluetooth APIs.
+        // To turn the radio ON we must fire the system's REQUEST_ENABLE intent.
+        try {
+            // This opens Android's "Do you want to turn on Bluetooth?" system dialog.
+            await Linking.openURL('android-app://com.android.settings/.bluetooth.RequestPermissionActivity');
+        } catch {
+            // Fallback: some ROMs block that deep link — use the general BT settings page
+            try {
+                await Linking.openURL('android.settings.BLUETOOTH_SETTINGS');
+            } catch {
+                // Last resort: prompt user to enable manually
+                Alert.alert(
+                    '🔵 Enable Bluetooth',
+                    'Please turn on Bluetooth in your device Settings to enable mesh networking.\n\nSettings → Connections → Bluetooth → ON',
+                    [
+                        { text: 'Open Settings', onPress: () => Linking.openSettings() },
+                        { text: 'Later', style: 'cancel' },
+                    ]
+                );
+            }
+        }
+
+        // ── Step 3: After Bluetooth, prompt for WiFi (non-blocking) ──
+        setTimeout(() => {
+            Alert.alert(
+                '📶 Enable Wi-Fi',
+                'For best mesh networking range, please also ensure Wi-Fi is turned on.',
+                [
+                    {
+                        text: 'Open Wi-Fi Settings',
+                        onPress: () => {
+                            Linking.openURL('android.settings.WIFI_SETTINGS').catch(() =>
+                                Linking.openSettings()
+                            );
+                        },
+                    },
+                    { text: 'Already On', style: 'cancel' },
+                ]
+            );
+        }, 1500); // slight delay so BT dialog doesn't clash
     };
 
     // ── LOGOUT ──
@@ -775,11 +813,8 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
         { name: 'Node Delta', distance: '2.1 km', signal: 0, status: 'offline' as const },
     ];
 
-    const contacts = [
-        { name: 'Aarav Kumar', relationship: 'Brother', phone: '98765 43210' },
-        { name: 'Meera Singh', relationship: 'Friend', phone: '98760 11223' },
-        { name: 'Dr. Ananya Rao', relationship: 'Doctor', phone: '98811 22334' },
-    ];
+    // contacts come from trustedContacts state (real device contacts)
+    const contactsForDisplay = trustedContacts.slice(0, 5); // show top 5
 
     const communityAlerts = [
         { type: 'danger' as const, title: 'Road Blocked', message: 'MG Road near station — avoid area', time: '5m ago' },
@@ -804,6 +839,107 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                 onClose={() => setShowLocationSharing(false)}
                 onShare={handleLocationShare}
             />
+
+            {/* ── Contact Picker Modal (for Share Location) ── */}
+            <Modal
+                transparent
+                visible={showContactPicker}
+                animationType="slide"
+                statusBarTranslucent
+                onRequestClose={() => setShowContactPicker(false)}
+            >
+                <View style={cpStyles.overlay}>
+                    <TouchableOpacity
+                        style={StyleSheet.absoluteFillObject}
+                        activeOpacity={1}
+                        onPress={() => setShowContactPicker(false)}
+                    />
+                    <View style={cpStyles.sheet}>
+                        <View style={cpStyles.handle} />
+                        {/* Header */}
+                        <View style={cpStyles.header}>
+                            <View style={cpStyles.headerIconWrap}>
+                                <LocationIcon color={COLORS.white} size={20} />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <Text style={cpStyles.title}>Share Live Location</Text>
+                                <Text style={cpStyles.subtitle}>Choose contacts to share your location with</Text>
+                            </View>
+                        </View>
+
+                        {/* Contacts List — use real trustedContacts */}
+                        <Text style={cpStyles.sectionLabel}>TOP CONTACTS</Text>
+                        {trustedContacts.length === 0 ? (
+                            <Text style={{ color: COLORS.muted, fontSize: 13, textAlign: 'center', marginVertical: 20 }}>
+                                No trusted contacts yet.{' '}
+                                <Text
+                                    style={{ color: COLORS.orange, fontWeight: '700' }}
+                                    onPress={() => { setShowContactPicker(false); navigation.navigate('ContactsManager'); }}
+                                >
+                                    Add some →
+                                </Text>
+                            </Text>
+                        ) : trustedContacts.map((contact) => {
+                            const isSelected = selectedContacts.includes(contact.id);
+                            const initials = contactsService.getInitials(contact.name);
+                            return (
+                                <TouchableOpacity
+                                    key={contact.id}
+                                    style={[cpStyles.contactRow, isSelected && cpStyles.contactRowSelected]}
+                                    activeOpacity={0.75}
+                                    onPress={() => {
+                                        setSelectedContacts(prev =>
+                                            prev.includes(contact.id)
+                                                ? prev.filter(n => n !== contact.id)
+                                                : [...prev, contact.id]
+                                        );
+                                    }}
+                                >
+                                    <View style={[cpStyles.avatar, isSelected && cpStyles.avatarSelected]}>
+                                        <Text style={[cpStyles.avatarText, isSelected && cpStyles.avatarTextSelected]}>
+                                            {initials}
+                                        </Text>
+                                    </View>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={cpStyles.contactName}>{contact.name}</Text>
+                                        <Text style={cpStyles.contactMeta}>{contact.relationship} · {contact.phone}</Text>
+                                    </View>
+                                    <View style={[cpStyles.checkCircle, isSelected && cpStyles.checkCircleSelected]}>
+                                        {isSelected && <Text style={cpStyles.checkMark}>✓</Text>}
+                                    </View>
+                                </TouchableOpacity>
+                            );
+                        })}
+
+                        {/* Share Button */}
+                        <TouchableOpacity
+                            style={[
+                                cpStyles.shareBtn,
+                                selectedContacts.length === 0 && cpStyles.shareBtnDisabled,
+                            ]}
+                            activeOpacity={0.82}
+                            disabled={selectedContacts.length === 0}
+                            onPress={() => {
+                                setShowContactPicker(false);
+                                setTimeout(() => setShowLocationSharing(true), 300);
+                            }}
+                        >
+                            <Text style={cpStyles.shareBtnText}>
+                                {selectedContacts.length === 0
+                                    ? 'Select at least one contact'
+                                    : `Share with ${selectedContacts.length} contact${selectedContacts.length > 1 ? 's' : ''}`}
+                            </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={cpStyles.cancelBtn}
+                            onPress={() => setShowContactPicker(false)}
+                            activeOpacity={0.7}
+                        >
+                            <Text style={cpStyles.cancelBtnText}>Cancel</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
 
             {/* ── Profile Sheet ── */}
             <ProfileSheet
@@ -946,7 +1082,10 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                             sublabel="Live tracking"
                             bgColor={COLORS.orangeLight}
                             borderColor={COLORS.orange}
-                            onPress={() => setShowLocationSharing(true)}
+                            onPress={() => {
+                                setSelectedContacts([]);
+                                setShowContactPicker(true);
+                            }}
                         />
                         <QuickAction
                             icon={<MeshIcon color={COLORS.blue} />}
@@ -1016,18 +1155,42 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                     <Animated.View entering={FadeInUp.duration(350)}>
                         <View style={styles.sectionHeader}>
                             <Text style={styles.sectionTitle}>Contacts</Text>
-                            <TouchableOpacity activeOpacity={0.7}>
-                                <Text style={styles.seeAll}>See all →</Text>
+                            <TouchableOpacity
+                                activeOpacity={0.7}
+                                onPress={() => navigation.navigate('ContactsManager')}
+                            >
+                                <Text style={styles.seeAll}>Manage →</Text>
                             </TouchableOpacity>
                         </View>
-                        <View style={styles.contactsCard}>
-                            {contacts.map((contact, i) => (
-                                <View key={contact.name}>
-                                    <ContactCard {...contact} />
-                                    {i < contacts.length - 1 && <View style={styles.nodeDivider} />}
-                                </View>
-                            ))}
-                        </View>
+                        {contactsForDisplay.length === 0 ? (
+                            <TouchableOpacity
+                                style={styles.emptyContactsCard}
+                                onPress={() => navigation.navigate('ContactsManager')}
+                                activeOpacity={0.8}
+                            >
+                                <Text style={styles.emptyContactsEmoji}>👥</Text>
+                                <Text style={styles.emptyContactsTitle}>No Trusted Contacts</Text>
+                                <Text style={styles.emptyContactsSub}>Tap to add people from your contacts</Text>
+                            </TouchableOpacity>
+                        ) : (
+                            <View style={styles.contactsCard}>
+                                {contactsForDisplay.map((contact, i) => (
+                                    <View key={contact.id}>
+                                        <TouchableOpacity
+                                            activeOpacity={0.8}
+                                            onPress={() => navigation.navigate('ContactDetail', { contactId: contact.id })}
+                                        >
+                                            <ContactCard
+                                                name={contact.name}
+                                                relationship={contact.relationship}
+                                                phone={contact.phone}
+                                            />
+                                        </TouchableOpacity>
+                                        {i < contactsForDisplay.length - 1 && <View style={styles.nodeDivider} />}
+                                    </View>
+                                ))}
+                            </View>
+                        )}
                     </Animated.View>
                 )}
 
@@ -1221,6 +1384,94 @@ const profileStyles = StyleSheet.create({
     },
 });
 
+// ─── Contact Picker Styles ──────────────────────────────────────────────────
+const cpStyles = StyleSheet.create({
+    overlay: {
+        flex: 1,
+        backgroundColor: 'rgba(44,26,14,0.52)',
+        justifyContent: 'flex-end',
+    },
+    sheet: {
+        backgroundColor: COLORS.white,
+        borderTopLeftRadius: 28,
+        borderTopRightRadius: 28,
+        paddingHorizontal: 18,
+        paddingBottom: 36,
+        paddingTop: 12,
+    },
+    handle: {
+        width: 40, height: 4, borderRadius: 2,
+        backgroundColor: 'rgba(44,26,14,0.15)',
+        alignSelf: 'center',
+        marginBottom: 18,
+    },
+    header: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        marginBottom: 20,
+    },
+    headerIconWrap: {
+        width: 44, height: 44, borderRadius: 13,
+        backgroundColor: COLORS.orange,
+        alignItems: 'center', justifyContent: 'center',
+        shadowColor: COLORS.orange,
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.3, shadowRadius: 8, elevation: 4,
+    },
+    title: {
+        fontSize: 17, fontWeight: '800', color: COLORS.brown, letterSpacing: -0.4,
+    },
+    subtitle: {
+        fontSize: 12, fontWeight: '500', color: COLORS.muted, marginTop: 2,
+    },
+    sectionLabel: {
+        fontSize: 10, fontWeight: '700', color: COLORS.muted,
+        letterSpacing: 1.2, marginBottom: 10, marginLeft: 2,
+    },
+    contactRow: {
+        flexDirection: 'row', alignItems: 'center', gap: 12,
+        backgroundColor: COLORS.bg,
+        borderWidth: 1.5, borderColor: 'transparent',
+        borderRadius: 14, paddingHorizontal: 12, paddingVertical: 11,
+        marginBottom: 8,
+    },
+    contactRowSelected: {
+        backgroundColor: COLORS.orangeLight,
+        borderColor: COLORS.orange,
+    },
+    avatar: {
+        width: 42, height: 42, borderRadius: 13,
+        backgroundColor: COLORS.greenLight,
+        alignItems: 'center', justifyContent: 'center',
+    },
+    avatarSelected: { backgroundColor: COLORS.orange },
+    avatarText: { fontSize: 14, fontWeight: '800', color: COLORS.green },
+    avatarTextSelected: { color: COLORS.white },
+    contactName: { fontSize: 14, fontWeight: '700', color: COLORS.brown, letterSpacing: -0.2 },
+    contactMeta: { fontSize: 11, fontWeight: '500', color: COLORS.muted, marginTop: 1 },
+    checkCircle: {
+        width: 24, height: 24, borderRadius: 12,
+        borderWidth: 1.5, borderColor: 'rgba(44,26,14,0.20)',
+        backgroundColor: COLORS.white,
+        alignItems: 'center', justifyContent: 'center',
+    },
+    checkCircleSelected: { backgroundColor: COLORS.orange, borderColor: COLORS.orange },
+    checkMark: { fontSize: 12, fontWeight: '800', color: COLORS.white, lineHeight: 14 },
+    shareBtn: {
+        backgroundColor: COLORS.orange, borderRadius: 100,
+        paddingVertical: 16, alignItems: 'center',
+        marginTop: 18, marginBottom: 10,
+        shadowColor: COLORS.orange,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3, shadowRadius: 10, elevation: 5,
+    },
+    shareBtnDisabled: { backgroundColor: 'rgba(44,26,14,0.12)', shadowOpacity: 0, elevation: 0 },
+    shareBtnText: { fontSize: 15, fontWeight: '700', color: COLORS.white, letterSpacing: 0.1 },
+    cancelBtn: { alignItems: 'center', paddingVertical: 8 },
+    cancelBtnText: { fontSize: 13, fontWeight: '600', color: COLORS.muted },
+});
+
 // ─── Main Styles ──────────────────────────────────────────────────
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.bg },
@@ -1354,6 +1605,19 @@ const styles = StyleSheet.create({
     alertMessage: { fontSize: 11, fontWeight: '500', color: COLORS.brownMid, lineHeight: 16 },
     alertTime: { fontSize: 10, fontWeight: '500', color: COLORS.muted, marginTop: 1 },
 
+    // Empty contacts card
+    emptyContactsCard: {
+        backgroundColor: COLORS.cardBg, borderWidth: 1.5, borderColor: COLORS.cardBorder,
+        borderRadius: 16, paddingVertical: 28, alignItems: 'center', marginBottom: 24,
+    },
+    emptyContactsEmoji: { fontSize: 36, marginBottom: 10 },
+    emptyContactsTitle: {
+        fontSize: 15, fontWeight: '800', color: COLORS.brown, letterSpacing: -0.3, marginBottom: 4,
+    },
+    emptyContactsSub: {
+        fontSize: 12, fontWeight: '500', color: COLORS.muted,
+    },
+
     // Bottom Nav
     bottomNav: { flexDirection: 'row', backgroundColor: COLORS.navBg, borderTopWidth: 1, borderTopColor: COLORS.navBorder, paddingBottom: 8, paddingTop: 8, shadowColor: '#000', shadowOffset: { width: 0, height: -2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 8 },
     navItem: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 3, paddingVertical: 4, position: 'relative' },
@@ -1363,3 +1627,4 @@ const styles = StyleSheet.create({
 });
 
 export default HomeScreen;
+

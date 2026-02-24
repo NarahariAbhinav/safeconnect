@@ -13,6 +13,8 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import Svg, { Circle, Line } from 'react-native-svg';
+import ContactDetailScreen from './src/screens/ContactDetailScreen';
+import ContactsManagerScreen from './src/screens/ContactsManagerScreen';
 import EmergencyAccessScreen from './src/screens/EmergencyAccessScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import LoginScreen from './src/screens/LoginScreen';
@@ -233,6 +235,16 @@ const App = () => {
             name="Home"
             component={HomeScreen}
             initialParams={autoLoginUser ? { user: autoLoginUser } : undefined}
+          />
+          <Stack.Screen
+            name="ContactsManager"
+            component={ContactsManagerScreen}
+            options={{ animation: 'slide_from_bottom' }}
+          />
+          <Stack.Screen
+            name="ContactDetail"
+            component={ContactDetailScreen}
+            options={{ animation: 'slide_from_right' }}
           />
         </Stack.Navigator>
       </NavigationContainer>
