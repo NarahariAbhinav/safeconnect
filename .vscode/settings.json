@@ -1,0 +1,10 @@
+{
+    "typescript.preferences.importModuleSpecifier": "relative",
+    "typescript.tsdk": "node_modules/typescript/lib",
+    "typescript.enablePromptUseWorkspaceTsdk": true,
+    "[json]": {
+        "editor.defaultFormatter": "vscode.json-language-features"
+    },
+    "javascript.validate.enable": false,
+    "node.experimental.nodeModulesTypeStripping": false
+}

@@ -18,8 +18,12 @@ import ContactsManagerScreen from './src/screens/ContactsManagerScreen';
 import EmergencyAccessScreen from './src/screens/EmergencyAccessScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import LoginScreen from './src/screens/LoginScreen';
+import NeedsReportScreen from './src/screens/NeedsReportScreen';
 import OnboardingScreen from './src/screens/OnboardingScreen';
+import ReliefMapScreen from './src/screens/ReliefMapScreen';
+import ResourceOfferScreen from './src/screens/ResourceOfferScreen';
 import SignupScreen from './src/screens/SignupScreen';
+import SOSScreen from './src/screens/SOSScreen';
 import WelcomeScreen from './src/screens/WelcomeScreen';
 
 const Stack = createNativeStackNavigator();
@@ -238,12 +242,32 @@ const App = () => {
           />
           <Stack.Screen
             name="ContactsManager"
-            component={ContactsManagerScreen}
+            component={ContactsManagerScreen as React.ComponentType<any>}
             options={{ animation: 'slide_from_bottom' }}
           />
           <Stack.Screen
             name="ContactDetail"
-            component={ContactDetailScreen}
+            component={ContactDetailScreen as React.ComponentType<any>}
+            options={{ animation: 'slide_from_right' }}
+          />
+          <Stack.Screen
+            name="SOSScreen"
+            component={SOSScreen as React.ComponentType<any>}
+            options={{ animation: 'slide_from_bottom' }}
+          />
+          <Stack.Screen
+            name="NeedsReport"
+            component={NeedsReportScreen as React.ComponentType<any>}
+            options={{ animation: 'slide_from_right' }}
+          />
+          <Stack.Screen
+            name="ResourceOffer"
+            component={ResourceOfferScreen as React.ComponentType<any>}
+            options={{ animation: 'slide_from_right' }}
+          />
+          <Stack.Screen
+            name="ReliefMap"
+            component={ReliefMapScreen as React.ComponentType<any>}
             options={{ animation: 'slide_from_right' }}
           />
         </Stack.Navigator>

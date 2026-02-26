@@ -22,8 +22,7 @@ import {
     ScrollView,
     StyleSheet,
     TouchableOpacity,
-    Vibration,
-    View,
+    View
 } from 'react-native';
 import { Text } from 'react-native-paper';
 import Animated, {
@@ -652,24 +651,14 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
         return () => clearInterval(interval);
     }, [fetchLiveLocation]);
 
-    // ── Emergency Mode ──
+    // ── Emergency Mode → navigate to full SOS hub ──
     const toggleEmergencyMode = () => {
         if (!emergencyMode) {
-            Alert.alert(
-                '🚨 Activate Emergency Mode',
-                'This will alert your emergency contacts and enable all safety features. Continue?',
-                [
-                    { text: 'Cancel', style: 'cancel' },
-                    {
-                        text: 'Activate',
-                        style: 'destructive',
-                        onPress: () => {
-                            setEmergencyMode(true);
-                            Vibration.vibrate([0, 200, 100, 200]);
-                        },
-                    },
-                ]
-            );
+            // Navigate to SOS hub — it handles activation, SMS, and deactivation
+            navigation.navigate('SOSScreen', {
+                userId: user?.id ?? user?.email ?? 'anonymous',
+                userName,
+            });
         } else {
             Alert.alert(
                 'Deactivate Emergency Mode',
