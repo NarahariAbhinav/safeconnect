@@ -1078,11 +1078,14 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                         />
                         <QuickAction
                             icon={<MeshIcon color={COLORS.blue} />}
-                            label="Mesh Network"
-                            sublabel="Connect nodes"
+                            label="Mesh Chat"
+                            sublabel="Offline messaging"
                             bgColor={COLORS.blueLight}
                             borderColor={COLORS.blue}
-                            onPress={() => { }}
+                            onPress={() => navigation.navigate('MeshChat', {
+                                userId: user?.id ?? user?.email ?? 'anonymous',
+                                userName,
+                            })}
                         />
                         <QuickAction
                             icon={<ShieldIcon color={COLORS.green} />}
@@ -1125,8 +1128,14 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                     <Animated.View entering={FadeInUp.duration(350)}>
                         <View style={styles.sectionHeader}>
                             <Text style={styles.sectionTitle}>Nearby Nodes</Text>
-                            <TouchableOpacity activeOpacity={0.7}>
-                                <Text style={styles.seeAll}>See all →</Text>
+                            <TouchableOpacity
+                                activeOpacity={0.7}
+                                onPress={() => navigation.navigate('MeshStatus', {
+                                    userId: user?.id ?? user?.email ?? 'anonymous',
+                                    userName,
+                                })}
+                            >
+                                <Text style={styles.seeAll}>Open Monitor →</Text>
                             </TouchableOpacity>
                         </View>
                         <View style={styles.nodesCard}>

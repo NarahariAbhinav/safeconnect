@@ -4,8 +4,11 @@
  * RN 0.81+ with newArchEnabled:true when navigation.replace() fires
  * mid-animation. Reanimated runs on the UI thread and is fully safe.
  */
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useState } from 'react';
 import {
+  Alert,
+  Modal,
   ScrollView,
   StyleSheet,
   TextInput,
@@ -101,6 +104,41 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
   const [success, setSuccess] = useState(false);
   const [emailFocused, setEmailFocused] = useState(false);
   const [passFocused, setPassFocused] = useState(false);
+
+  // ── Quick Start (offline guest mode) ──
+  const [showQuickStart, setShowQuickStart] = useState(false);
+  const [quickName, setQuickName] = useState('');
+  const [quickPhone, setQuickPhone] = useState('');
+  const [quickLoading, setQuickLoading] = useState(false);
+
+  const handleQuickStart = async () => {
+    if (!quickName.trim()) {
+      Alert.alert('Enter your name', 'Please enter at least your name to continue.');
+      return;
+    }
+    setQuickLoading(true);
+    try {
+      const guestUser = {
+        id: `guest_${Date.now()}`,
+        firstName: quickName.trim().split(' ')[0],
+        lastName: quickName.trim().split(' ').slice(1).join(' ') || '',
+        phone: quickPhone.trim() || 'Not provided',
+        email: '',
+        isGuest: true,
+        createdAt: new Date().toISOString(),
+      };
+      // Save to AsyncStorage — 100% offline, no internet needed
+      await AsyncStorage.setItem('safeconnect_currentUser', JSON.stringify(guestUser));
+      setQuickLoading(false);
+      setShowQuickStart(false);
+      setTimeout(() => {
+        navigation.replace('Home', { user: guestUser });
+      }, 200);
+    } catch (e) {
+      setQuickLoading(false);
+      Alert.alert('Error', 'Could not save. Please try again.');
+    }
+  };
 
   const handleLogin = async () => {
     setError('');
@@ -264,7 +302,110 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
             </Text>
           </Text>
         </Animated.View>
+
+        {/* ── DIVIDER ── */}
+        <Animated.View entering={FadeInUp.duration(500).delay(600)} style={styles.dividerRow}>
+          <View style={styles.dividerLine} />
+          <Text style={styles.dividerText}>OR</Text>
+          <View style={styles.dividerLine} />
+        </Animated.View>
+
+        {/* ── Quick Start Button ── */}
+        <Animated.View entering={FadeInUp.duration(500).delay(650)} style={{ marginBottom: 32 }}>
+          <TouchableOpacity
+            style={styles.quickStartBtn}
+            activeOpacity={0.85}
+            onPress={() => setShowQuickStart(true)}
+          >
+            <Text style={styles.quickStartEmoji}>⚡</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.quickStartTitle}>Quick Start — No Internet Needed</Text>
+              <Text style={styles.quickStartSub}>Enter just your name · Works 100% offline</Text>
+            </View>
+            <Text style={styles.quickStartArrow}>→</Text>
+          </TouchableOpacity>
+        </Animated.View>
       </ScrollView>
+
+      {/* ── Quick Start Modal ── */}
+      <Modal
+        transparent
+        visible={showQuickStart}
+        animationType="slide"
+        onRequestClose={() => setShowQuickStart(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity
+            style={{ flex: 1 }}
+            activeOpacity={1}
+            onPress={() => setShowQuickStart(false)}
+          />
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+
+            {/* Header */}
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalEmoji}>⚡</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modalTitle}>Quick Start</Text>
+                <Text style={styles.modalSub}>No internet needed · 100% offline</Text>
+              </View>
+            </View>
+
+            {/* What this does */}
+            <View style={styles.modalInfoBox}>
+              <Text style={styles.modalInfoText}>
+                {'✅ Works instantly without internet or signal\n'}
+                {'✅ All SOS, Needs, Contacts work offline\n'}
+                {'⚠️  You can upgrade to a full account later'}
+              </Text>
+            </View>
+
+            {/* Name input */}
+            <Text style={styles.modalLabel}>YOUR NAME *</Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Enter your full name"
+              placeholderTextColor={COLORS.muted}
+              value={quickName}
+              onChangeText={setQuickName}
+              autoFocus
+              autoCapitalize="words"
+            />
+
+            {/* Phone input */}
+            <Text style={styles.modalLabel}>PHONE NUMBER (optional)</Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="For SMS alerts to contacts"
+              placeholderTextColor={COLORS.muted}
+              value={quickPhone}
+              onChangeText={setQuickPhone}
+              keyboardType="phone-pad"
+            />
+
+            {/* Go button */}
+            <TouchableOpacity
+              style={[styles.modalGoBtn, quickLoading && { opacity: 0.65 }]}
+              onPress={handleQuickStart}
+              activeOpacity={0.85}
+              disabled={quickLoading}
+            >
+              <Text style={styles.modalGoBtnText}>
+                {quickLoading ? 'Starting...' : '⚡ Start Using SafeConnect'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.modalCancelBtn}
+              onPress={() => setShowQuickStart(false)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.modalCancelText}>Cancel — Use account instead</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -466,6 +607,70 @@ const styles = StyleSheet.create({
     color: COLORS.green,
     letterSpacing: 0.1,
   },
+
+  // ── Divider
+  dividerRow: {
+    flexDirection: 'row', alignItems: 'center',
+    gap: 10, marginBottom: 16,
+  },
+  dividerLine: { flex: 1, height: 1, backgroundColor: 'rgba(44,26,14,0.10)' },
+  dividerText: { fontSize: 11, fontWeight: '700', color: COLORS.muted, letterSpacing: 1 },
+
+  // ── Quick Start button
+  quickStartBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: 'rgba(42,122,90,0.10)',
+    borderWidth: 1.5, borderColor: 'rgba(42,122,90,0.30)',
+    borderRadius: 16, padding: 16,
+  },
+  quickStartEmoji: { fontSize: 24 },
+  quickStartTitle: { fontSize: 14, fontWeight: '800', color: '#2A7A5A', letterSpacing: -0.2 },
+  quickStartSub: { fontSize: 11, fontWeight: '500', color: COLORS.muted, marginTop: 2 },
+  quickStartArrow: { fontSize: 18, color: '#2A7A5A', fontWeight: '700' },
+
+  // ── Modal
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(44,26,14,0.55)', justifyContent: 'flex-end' },
+  modalSheet: {
+    backgroundColor: COLORS.bg,
+    borderTopLeftRadius: 28, borderTopRightRadius: 28,
+    paddingHorizontal: 20, paddingBottom: 40, paddingTop: 12,
+  },
+  modalHandle: {
+    width: 40, height: 4, borderRadius: 2,
+    backgroundColor: 'rgba(44,26,14,0.15)',
+    alignSelf: 'center', marginBottom: 20,
+  },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
+  modalEmoji: { fontSize: 32 },
+  modalTitle: { fontSize: 20, fontWeight: '800', color: COLORS.brown, letterSpacing: -0.4 },
+  modalSub: { fontSize: 12, fontWeight: '500', color: COLORS.muted, marginTop: 2 },
+  modalInfoBox: {
+    backgroundColor: 'rgba(42,122,90,0.08)',
+    borderWidth: 1, borderColor: 'rgba(42,122,90,0.20)',
+    borderRadius: 12, padding: 14, marginBottom: 20,
+  },
+  modalInfoText: { fontSize: 13, color: '#1B4332', lineHeight: 22, fontWeight: '500' },
+  modalLabel: {
+    fontSize: 10, fontWeight: '700', color: COLORS.muted,
+    letterSpacing: 1, marginBottom: 8, marginLeft: 2,
+  },
+  modalInput: {
+    backgroundColor: COLORS.white, borderWidth: 1.5,
+    borderColor: 'rgba(44,26,14,0.15)', borderRadius: 12,
+    paddingHorizontal: 14, paddingVertical: 14,
+    fontSize: 15, fontWeight: '600', color: COLORS.brown,
+    marginBottom: 16,
+  },
+  modalGoBtn: {
+    backgroundColor: '#2A7A5A', borderRadius: 100,
+    paddingVertical: 16, alignItems: 'center',
+    shadowColor: '#2A7A5A', shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3, shadowRadius: 10, elevation: 6,
+    marginBottom: 12,
+  },
+  modalGoBtnText: { fontSize: 16, fontWeight: '800', color: COLORS.white },
+  modalCancelBtn: { alignItems: 'center', paddingVertical: 10 },
+  modalCancelText: { fontSize: 13, fontWeight: '600', color: COLORS.muted },
 });
 
 export default LoginScreen;

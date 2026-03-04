@@ -18,6 +18,8 @@ import ContactsManagerScreen from './src/screens/ContactsManagerScreen';
 import EmergencyAccessScreen from './src/screens/EmergencyAccessScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import LoginScreen from './src/screens/LoginScreen';
+import MeshChatScreen from './src/screens/MeshChatScreen';
+import MeshStatusScreen from './src/screens/MeshStatusScreen';
 import NeedsReportScreen from './src/screens/NeedsReportScreen';
 import OnboardingScreen from './src/screens/OnboardingScreen';
 import ReliefMapScreen from './src/screens/ReliefMapScreen';
@@ -25,6 +27,8 @@ import ResourceOfferScreen from './src/screens/ResourceOfferScreen';
 import SignupScreen from './src/screens/SignupScreen';
 import SOSScreen from './src/screens/SOSScreen';
 import WelcomeScreen from './src/screens/WelcomeScreen';
+import { notificationService } from './src/services/notificationService';
+import { soundService } from './src/services/soundService';
 
 const Stack = createNativeStackNavigator();
 
@@ -196,6 +200,10 @@ const App = () => {
     };
 
     determineInitialRoute();
+
+    // Init notification permission + sound on startup
+    notificationService.init();
+    soundService.init();
   }, []);
 
   if (!isReady) {
@@ -268,6 +276,16 @@ const App = () => {
           <Stack.Screen
             name="ReliefMap"
             component={ReliefMapScreen as React.ComponentType<any>}
+            options={{ animation: 'slide_from_right' }}
+          />
+          <Stack.Screen
+            name="MeshStatus"
+            component={MeshStatusScreen as React.ComponentType<any>}
+            options={{ animation: 'slide_from_bottom' }}
+          />
+          <Stack.Screen
+            name="MeshChat"
+            component={MeshChatScreen as React.ComponentType<any>}
             options={{ animation: 'slide_from_right' }}
           />
         </Stack.Navigator>

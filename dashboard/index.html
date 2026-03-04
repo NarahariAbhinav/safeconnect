@@ -1,0 +1,1070 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SafeConnect | Telangana Emergency Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0
+    }
+
+    :root {
+      --bg: #F5F6FA;
+      --white: #FFF;
+      --orange: #E05A2B;
+      --orange-lt: rgba(224, 90, 43, .1);
+      --brown: #2C1A0E;
+      --muted: #8C7060;
+      --green: #2A7A5A;
+      --green-lt: rgba(42, 122, 90, .1);
+      --blue: #1565C0;
+      --blue-lt: rgba(21, 101, 192, .1);
+      --red: #C62828;
+      --red-lt: rgba(198, 40, 40, .08);
+      --amber: #D84315;
+      --amber-lt: rgba(216, 67, 21, .1);
+      --border: #E8E0D8;
+      --sb: 340px
+    }
+
+    html,
+    body {
+      height: 100%;
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--brown);
+      overflow: hidden
+    }
+
+    ::-webkit-scrollbar {
+      width: 4px
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 2px
+    }
+
+    .app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh
+    }
+
+    /* Topbar */
+    .topbar {
+      background: var(--orange);
+      color: #fff;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 5px;
+      letter-spacing: .8px;
+      text-transform: uppercase
+    }
+
+    /* Header */
+    .hdr {
+      background: var(--white);
+      border-bottom: 1px solid var(--border);
+      padding: 0 20px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, .04)
+    }
+
+    .logo {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: var(--orange);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px
+    }
+
+    .h-t {
+      font-size: 14px;
+      font-weight: 800
+    }
+
+    .h-t span {
+      color: var(--orange)
+    }
+
+    .h-s {
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 1px;
+      text-transform: uppercase;
+      letter-spacing: .5px
+    }
+
+    .h-r {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 10px
+    }
+
+    .clk {
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      font-variant-numeric: tabular-nums;
+      text-align: right
+    }
+
+    .clk-d {
+      font-size: 9px;
+      color: var(--muted);
+      text-align: right;
+      text-transform: uppercase
+    }
+
+    .live {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      background: var(--green-lt);
+      border: 1px solid rgba(42, 122, 90, .3);
+      border-radius: 50px;
+      padding: 4px 11px;
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--green)
+    }
+
+    .ldot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: bl 1.5s infinite
+    }
+
+    @keyframes bl {
+      50% {
+        opacity: .3
+      }
+    }
+
+    .hbtn {
+      background: var(--bg);
+      border: 1.5px solid var(--border);
+      color: var(--muted);
+      padding: 5px 12px;
+      border-radius: 7px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: .15s
+    }
+
+    .hbtn:hover {
+      border-color: var(--orange);
+      color: var(--orange)
+    }
+
+    .upd {
+      font-size: 9px;
+      color: var(--green);
+      font-weight: 700;
+      text-align: center
+    }
+
+    /* Filter */
+    .fbar {
+      background: var(--white);
+      border-bottom: 1px solid var(--border);
+      padding: 6px 20px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex-wrap: wrap
+    }
+
+    .fl {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .5px
+    }
+
+    .fc {
+      padding: 4px 11px;
+      border-radius: 50px;
+      font-size: 10px;
+      font-weight: 700;
+      border: 1.5px solid var(--border);
+      background: var(--bg);
+      color: var(--muted);
+      cursor: pointer;
+      font-family: inherit;
+      transition: .15s
+    }
+
+    .fc:hover {
+      border-color: var(--orange);
+      color: var(--orange)
+    }
+
+    .fc.on {
+      background: var(--orange);
+      border-color: var(--orange);
+      color: #fff
+    }
+
+    .fsep {
+      width: 1px;
+      height: 18px;
+      background: var(--border)
+    }
+
+    .fsel {
+      background: var(--bg);
+      border: 1.5px solid var(--border);
+      color: var(--brown);
+      padding: 4px 8px;
+      border-radius: 7px;
+      font-size: 10px;
+      font-weight: 600;
+      font-family: inherit;
+      outline: none;
+      cursor: pointer
+    }
+
+    /* District info bar */
+    .dbar {
+      background: var(--orange);
+      color: #fff;
+      padding: 5px 16px;
+      font-size: 11px;
+      font-weight: 600;
+      display: none;
+      align-items: center;
+      gap: 8px
+    }
+
+    .dbar.on {
+      display: flex
+    }
+
+    .dbar button {
+      margin-left: auto;
+      background: rgba(255, 255, 255, .2);
+      border: none;
+      color: #fff;
+      border-radius: 5px;
+      padding: 1px 8px;
+      cursor: pointer;
+      font-size: 11px
+    }
+
+    /* Stats */
+    .stats {
+      display: flex;
+      background: var(--white);
+      border-bottom: 1px solid var(--border)
+    }
+
+    .st {
+      flex: 1;
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      border-right: 1px solid var(--border);
+      cursor: pointer;
+      transition: .15s;
+      position: relative
+    }
+
+    .st:last-child {
+      border-right: none
+    }
+
+    .st:hover {
+      background: var(--bg)
+    }
+
+    .st.on::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--orange)
+    }
+
+    .si {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px
+    }
+
+    .sn {
+      font-size: 19px;
+      font-weight: 900;
+      letter-spacing: -1px;
+      line-height: 1
+    }
+
+    .sl {
+      font-size: 9px;
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .4px;
+      margin-top: 1px
+    }
+
+    /* Body */
+    .body {
+      display: flex;
+      flex: 1;
+      overflow: hidden
+    }
+
+    .mapw {
+      position: relative;
+      flex: 1;
+      display: flex
+    }
+
+    #map {
+      flex: 1
+    }
+
+    .leaflet-container {
+      background: #dce8f0
+    }
+
+    .legend {
+      position: absolute;
+      bottom: 14px;
+      left: 10px;
+      z-index: 800;
+      background: rgba(255, 255, 255, .92);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 9px 12px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, .06)
+    }
+
+    .lgh {
+      font-size: 8px;
+      font-weight: 800;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 5px
+    }
+
+    .lgr {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 10px;
+      color: var(--brown);
+      margin-bottom: 3px
+    }
+
+    .lgd {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      border: 1.5px solid rgba(255, 255, 255, .8)
+    }
+
+    /* Sidebar */
+    .sb {
+      width: var(--sb);
+      background: var(--white);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden
+    }
+
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto
+    }
+
+    .tabs::-webkit-scrollbar {
+      display: none
+    }
+
+    .tb {
+      flex: 1;
+      min-width: 52px;
+      padding: 9px 4px;
+      text-align: center;
+      font-size: 9px;
+      font-weight: 800;
+      color: var(--muted);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: .15s;
+      text-transform: uppercase;
+      letter-spacing: .3px;
+      white-space: nowrap
+    }
+
+    .tb:hover {
+      color: var(--brown)
+    }
+
+    .tb.on {
+      color: var(--orange);
+      border-bottom-color: var(--orange)
+    }
+
+    .badge {
+      display: inline-block;
+      min-width: 14px;
+      height: 13px;
+      border-radius: 7px;
+      background: var(--orange);
+      color: #fff;
+      font-size: 8px;
+      font-weight: 800;
+      line-height: 13px;
+      text-align: center;
+      padding: 0 3px;
+      margin-left: 2px;
+      vertical-align: middle
+    }
+
+    .pnl {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+      display: none
+    }
+
+    .pnl.on {
+      display: block
+    }
+
+    .ph {
+      font-size: 9px;
+      font-weight: 800;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .8px;
+      margin-bottom: 7px;
+      padding-bottom: 5px;
+      border-bottom: 1px solid var(--border)
+    }
+
+    /* Cards */
+    .cd {
+      background: var(--bg);
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      padding: 11px;
+      margin-bottom: 6px;
+      cursor: pointer;
+      transition: .18s;
+      position: relative
+    }
+
+    .cd:hover {
+      border-color: var(--orange);
+      box-shadow: 0 2px 10px rgba(224, 90, 43, .1)
+    }
+
+    .cs {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      border-radius: 3px 0 0 3px
+    }
+
+    .cr {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding-left: 7px
+    }
+
+    .ca {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 800;
+      flex-shrink: 0
+    }
+
+    .cn {
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.3
+    }
+
+    .csub {
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 1px
+    }
+
+    .cb {
+      font-size: 11px;
+      color: var(--muted);
+      padding-left: 7px;
+      margin-top: 5px;
+      line-height: 1.5
+    }
+
+    .cf {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding-left: 7px;
+      margin-top: 6px
+    }
+
+    .ts {
+      font-size: 9px;
+      color: var(--muted);
+      margin-left: auto
+    }
+
+    /* Pills */
+    .p {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 6px;
+      border-radius: 50px;
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .3px
+    }
+
+    .pr {
+      background: var(--red-lt);
+      color: var(--red);
+      border: 1px solid rgba(198, 40, 40, .2)
+    }
+
+    .pg {
+      background: var(--green-lt);
+      color: var(--green);
+      border: 1px solid rgba(42, 122, 90, .2)
+    }
+
+    .pa {
+      background: var(--amber-lt);
+      color: var(--amber);
+      border: 1px solid rgba(216, 67, 21, .2)
+    }
+
+    .pb {
+      background: var(--blue-lt);
+      color: var(--blue);
+      border: 1px solid rgba(21, 101, 192, .2)
+    }
+
+    .po {
+      background: var(--orange-lt);
+      color: var(--orange);
+      border: 1px solid rgba(224, 90, 43, .2)
+    }
+
+    .py {
+      background: rgba(44, 26, 14, .05);
+      color: var(--muted);
+      border: 1px solid var(--border)
+    }
+
+    .pw {
+      background: #FFEBEE;
+      color: var(--red);
+      border: 1px solid rgba(198, 40, 40, .2);
+      animation: bl 1s infinite
+    }
+
+    /* Capacity bar */
+    .cpw {
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      margin: 6px 7px 1px;
+      overflow: hidden
+    }
+
+    .cpb {
+      height: 100%;
+      border-radius: 2px;
+      transition: width .5s
+    }
+
+    .cpl {
+      font-size: 10px;
+      color: var(--muted);
+      padding-left: 7px
+    }
+
+    .rcs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 3px;
+      padding-left: 7px;
+      margin-top: 5px
+    }
+
+    .rc {
+      background: var(--white);
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 600;
+      padding: 2px 5px;
+      border-radius: 4px;
+      border: 1px solid var(--border)
+    }
+
+    /* Dispatch button */
+    .dbtn {
+      margin-left: auto;
+      background: var(--green);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 4px 9px;
+      font-size: 9px;
+      font-weight: 800;
+      cursor: pointer;
+      font-family: inherit;
+      transition: .15s
+    }
+
+    .dbtn:hover {
+      background: #1f5f45
+    }
+
+    /* Empty */
+    .emp {
+      text-align: center;
+      padding: 36px 14px
+    }
+
+    .emp-i {
+      font-size: 32px;
+      margin-bottom: 8px
+    }
+
+    .emp-t {
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 3px
+    }
+
+    .emp-b {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.6
+    }
+
+    /* Modal */
+    .mbg {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(44, 26, 14, .4);
+      z-index: 9000;
+      align-items: center;
+      justify-content: center
+    }
+
+    .mbg.on {
+      display: flex
+    }
+
+    .mbox {
+      background: var(--white);
+      border-radius: 13px;
+      max-width: 440px;
+      width: 92%;
+      box-shadow: 0 14px 44px rgba(44, 26, 14, .18);
+      overflow: hidden
+    }
+
+    .mh {
+      background: var(--bg);
+      padding: 13px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid var(--border)
+    }
+
+    .mt {
+      font-size: 13px;
+      font-weight: 800;
+      flex: 1
+    }
+
+    .mx {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 16px;
+      cursor: pointer;
+      padding: 2px 5px;
+      border-radius: 4px
+    }
+
+    .mx:hover {
+      background: var(--orange-lt);
+      color: var(--orange)
+    }
+
+    .mb {
+      padding: 13px 16px
+    }
+
+    .mr {
+      display: flex;
+      gap: 10px;
+      padding: 7px 0;
+      border-bottom: 1px solid var(--border);
+      align-items: flex-start
+    }
+
+    .mr:last-child {
+      border: none
+    }
+
+    .ml {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .4px;
+      min-width: 100px;
+      padding-top: 1px
+    }
+
+    .mv {
+      font-size: 12px;
+      flex: 1;
+      line-height: 1.5
+    }
+
+    .mf {
+      padding: 10px 16px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 7px
+    }
+
+    .mbtn {
+      flex: 1;
+      padding: 9px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      text-align: center;
+      text-decoration: none;
+      border: none;
+      transition: .15s
+    }
+
+    .mbp {
+      background: var(--orange);
+      color: #fff
+    }
+
+    .mbp:hover {
+      background: #c44d21
+    }
+
+    .mbs {
+      background: var(--bg);
+      color: var(--muted);
+      border: 1.5px solid var(--border)
+    }
+
+    .inp {
+      width: 100%;
+      font-family: inherit;
+      padding: 5px 8px;
+      border: 1.5px solid var(--border);
+      border-radius: 6px;
+      font-size: 12px;
+      outline: none
+    }
+
+    .inp:focus {
+      border-color: var(--orange)
+    }
+
+    /* Toast */
+    .tz {
+      position: fixed;
+      top: 64px;
+      right: 12px;
+      z-index: 9500;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      pointer-events: none
+    }
+
+    .toast {
+      background: var(--white);
+      border-left: 3px solid var(--red);
+      border-radius: 8px;
+      padding: 10px 13px;
+      max-width: 280px;
+      box-shadow: 0 4px 18px rgba(44, 26, 14, .1);
+      animation: sIn .3s;
+      pointer-events: auto
+    }
+
+    @keyframes sIn {
+      from {
+        transform: translateX(110%);
+        opacity: 0
+      }
+
+      to {
+        transform: translateX(0);
+        opacity: 1
+      }
+    }
+
+    .toast-t {
+      font-size: 11px;
+      font-weight: 800;
+      margin-bottom: 2px
+    }
+
+    .toast-b {
+      font-size: 10px;
+      color: var(--muted);
+      line-height: 1.5
+    }
+
+    /* Leaflet popup */
+    .leaflet-popup-content-wrapper {
+      border-radius: 9px !important;
+      box-shadow: 0 4px 18px rgba(44, 26, 14, .12) !important
+    }
+
+    .lpt {
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 3px
+    }
+
+    .lpr {
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 2px;
+      line-height: 1.5
+    }
+
+    .lptag {
+      display: inline-block;
+      margin-top: 5px;
+      padding: 2px 6px;
+      border-radius: 50px;
+      font-size: 8px;
+      font-weight: 800;
+      text-transform: uppercase
+    }
+  </style>
+</head>
+
+<body>
+  <div class="app">
+    <div class="topbar">SafeConnect &#183; Telangana State Emergency Operations Centre &#183; TSDMA</div>
+    <div class="hdr">
+      <div class="logo">&#128737;</div>
+      <div>
+        <div class="h-t">Safe<span>Connect</span> &#8212; Emergency Dashboard</div>
+        <div class="h-s">NDMA &#183; Telangana &#183; Real-Time Coordination</div>
+      </div>
+      <div class="h-r">
+        <div>
+          <div class="clk" id="clk">--:--</div>
+          <div class="clk-d" id="clkd">---</div>
+        </div>
+        <div class="upd" id="upd"></div>
+        <div class="live">
+          <div class="ldot"></div>LIVE
+        </div>
+        <button class="hbtn" onclick="xport()">&#8595; Export</button>
+        <button class="hbtn" onclick="togFS()">&#9974; Map</button>
+        <button class="hbtn" onclick="load()">&#8635;</button>
+      </div>
+    </div>
+    <div class="fbar">
+      <span class="fl">Zone:</span>
+      <button class="fc on" id="z-all" onclick="sz('all')">All</button>
+      <button class="fc" id="z-cen" onclick="sz('Central')">Central</button>
+      <button class="fc" id="z-nw" onclick="sz('North West')">N.West</button>
+      <button class="fc" id="z-ne" onclick="sz('North East')">N.East</button>
+      <button class="fc" id="z-se" onclick="sz('South East')">S.East</button>
+      <button class="fc" id="z-sw" onclick="sz('South West')">S.West</button>
+      <div class="fsep"></div>
+      <span class="fl">District:</span>
+      <select class="fsel" id="dsel" onchange="sd(this.value)">
+        <option value="">All</option>
+      </select>
+    </div>
+    <div class="dbar" id="dbar"><span id="dbtxt"></span><button onclick="cd()">&#10005; Clear</button></div>
+    <div class="stats">
+      <div class="st on" id="s-sos" onclick="go('sos')">
+        <div class="si" style="background:var(--red-lt)">&#128680;</div>
+        <div>
+          <div class="sn" style="color:var(--red)" id="nsos">0</div>
+          <div class="sl">SOS</div>
+        </div>
+      </div>
+      <div class="st" id="s-needs" onclick="go('needs')">
+        <div class="si" style="background:var(--amber-lt)">&#128203;</div>
+        <div>
+          <div class="sn" style="color:var(--amber)" id="nnds">0</div>
+          <div class="sl">Need Help</div>
+        </div>
+      </div>
+      <div class="st" id="s-help" onclick="go('help')">
+        <div class="si" style="background:var(--green-lt)">&#129309;</div>
+        <div>
+          <div class="sn" style="color:var(--green)" id="nhlp">0</div>
+          <div class="sl">Can Help</div>
+        </div>
+      </div>
+      <div class="st" id="s-camps" onclick="go('camps')">
+        <div class="si" style="background:var(--blue-lt)">&#9978;</div>
+        <div>
+          <div class="sn" style="color:var(--blue)" id="ncmp">0</div>
+          <div class="sl">Camps</div>
+        </div>
+      </div>
+      <div class="st" id="s-teams" onclick="go('teams')">
+        <div class="si" style="background:var(--green-lt)">&#128658;</div>
+        <div>
+          <div class="sn" style="color:var(--green)" id="ntms">0</div>
+          <div class="sl">Teams</div>
+        </div>
+      </div>
+      <div class="st" id="s-districts" onclick="go('districts')">
+        <div class="si" style="background:var(--orange-lt)">&#127963;</div>
+        <div>
+          <div class="sn" style="color:var(--orange)">33</div>
+          <div class="sl">Dists</div>
+        </div>
+      </div>
+    </div>
+    <div class="body">
+      <div class="mapw">
+        <div id="map"></div>
+        <div class="legend">
+          <div class="lgh">Legend</div>
+          <div class="lgr">
+            <div class="lgd" style="background:#C62828"></div>SOS
+          </div>
+          <div class="lgr">
+            <div class="lgd" style="background:#D84315"></div>Needs
+          </div>
+          <div class="lgr">
+            <div class="lgd" style="background:#2A7A5A"></div>Help
+          </div>
+          <div class="lgr">
+            <div class="lgd" style="background:#1565C0"></div>Camp
+          </div>
+          <div class="lgr">
+            <div class="lgd" style="background:#E05A2B"></div>ECR
+          </div>
+        </div>
+      </div>
+      <div class="sb" id="sidebar">
+        <div class="tabs">
+          <div class="tb on" id="t-sos" onclick="go('sos')">SOS<span class="badge" id="bsos">0</span></div>
+          <div class="tb" id="t-needs" onclick="go('needs')">Needs<span class="badge" id="bnds">0</span></div>
+          <div class="tb" id="t-help" onclick="go('help')">Help<span class="badge" id="bhlp">0</span></div>
+          <div class="tb" id="t-camps" onclick="go('camps')">Camps</div>
+          <div class="tb" id="t-teams" onclick="go('teams')">Teams</div>
+          <div class="tb" id="t-districts" onclick="go('districts')">Dists</div>
+        </div>
+        <div class="pnl on" id="p-sos">
+          <div class="emp">
+            <div class="emp-i">&#8987;</div>
+            <div class="emp-t">Loading...</div>
+          </div>
+        </div>
+        <div class="pnl" id="p-needs">
+          <div class="emp">
+            <div class="emp-i">&#8987;</div>
+            <div class="emp-t">Loading...</div>
+          </div>
+        </div>
+        <div class="pnl" id="p-help">
+          <div class="emp">
+            <div class="emp-i">&#8987;</div>
+            <div class="emp-t">Loading...</div>
+          </div>
+        </div>
+        <div class="pnl" id="p-camps">
+          <div class="emp">
+            <div class="emp-i">&#8987;</div>
+            <div class="emp-t">Loading...</div>
+          </div>
+        </div>
+        <div class="pnl" id="p-teams">
+          <div class="emp">
+            <div class="emp-i">&#8987;</div>
+            <div class="emp-t">Loading...</div>
+          </div>
+        </div>
+        <div class="pnl" id="p-districts">
+          <div class="emp">
+            <div class="emp-i">&#8987;</div>
+            <div class="emp-t">Loading...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="tz" id="tz"></div>
+  <div class="mbg" id="mbg" onclick="if(event.target===this)cm()">
+    <div class="mbox" id="mbox"></div>
+  </div>
+  <script src="dashboard.js"></script>
+</body>
+
+</html>

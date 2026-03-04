@@ -35,9 +35,14 @@ import Animated, {
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Circle, Line, Path } from 'react-native-svg';
+import { batteryService, BatteryState } from '../services/batteryService';
+import { bleMeshService } from '../services/ble/BLEMeshService';
 import { contactsService, TrustedContact } from '../services/contacts';
 import { locationService } from '../services/location';
-import { SOSRecord, sosService } from '../services/sos';
+import { locationTrailService } from '../services/locationTrailService';
+import { notificationService } from '../services/notificationService';
+import { GovtAction, SOSRecord, sosService } from '../services/sos';
+import { soundService } from '../services/soundService';
 
 // ─── Colors ─────────────────────────────────────────────────────────
 const C = {
@@ -188,10 +193,14 @@ const SOSScreen: React.FC<Props> = ({ navigation, route }) => {
     const [elapsedSec, setElapsedSec] = useState(0);
     const [notifying, setNotifying] = useState(false);
     const [synced, setSynced] = useState(false);
-    const [isConnected, setIsConnected] = useState<boolean | null>(null); // null = checking
+    const [isConnected, setIsConnected] = useState<boolean | null>(null);
     const [sosStatus, setSosStatus] = useState<'idle' | 'sent' | 'queued'>('idle');
-
+    const [govtAction, setGovtAction] = useState<GovtAction | null>(null);
+    const [batteryInfo, setBatteryInfo] = useState<{ percent: string; icon: string; color: string }>({ percent: '—', icon: '🔋', color: '#2A7A5A' });
+    const [peerCount, setPeerCount] = useState(0);
+    const prevConnected = useRef<boolean | null>(null);
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     // ── Check connectivity via lightweight ping ──
     const checkConnectivity = useCallback(async () => {
@@ -200,9 +209,26 @@ const SOSScreen: React.FC<Props> = ({ navigation, route }) => {
                 method: 'HEAD',
                 cache: 'no-cache',
             });
-            setIsConnected(res.ok || res.status === 204);
+            const online = res.ok || res.status === 204;
+            setIsConnected(online);
+
+            // Auto-sync when coming back online
+            if (online && prevConnected.current === false) {
+                console.log('[SOS] Back online — syncing queued data...');
+                sosService.flushSyncQueue().then(({ flushed }) => {
+                    if (flushed > 0) console.log('[SOS] Synced', flushed, 'queued records ✅');
+                }).catch(() => { });
+                // Also sync chat messages
+                import('../services/chatService').then(({ chatService: cs }) => {
+                    cs.syncPendingMessages().then(n => {
+                        if (n > 0) console.log('[Chat] Synced', n, 'pending messages ✅');
+                    });
+                }).catch(() => { });
+            }
+            prevConnected.current = online;
         } catch {
             setIsConnected(false);
+            prevConnected.current = false;
         }
     }, []);
 
@@ -217,10 +243,62 @@ const SOSScreen: React.FC<Props> = ({ navigation, route }) => {
                 });
             }
         });
-        // Check connectivity on mount + every 10s
+        // Check connectivity on mount (battery-aware interval)
         checkConnectivity();
-        const pingInterval = setInterval(checkConnectivity, 10_000);
-        return () => clearInterval(pingInterval);
+        const pingInterval = setInterval(checkConnectivity, batteryService.profile.connectivityPing);
+
+        // Init battery monitor
+        batteryService.init().then(() => {
+            setBatteryInfo(batteryService.getDisplayInfo());
+        });
+        const removeBatteryListener = batteryService.onModeChange((state: BatteryState) => {
+            setBatteryInfo(batteryService.getDisplayInfo());
+            console.log('[SOS] Power mode:', state.mode, '- adjusting intervals');
+            // Notify user when battery hits critical
+            if (state.mode === 'critical') {
+                notificationService.notifyBatteryCritical(state.level);
+            }
+        });
+
+        // Init notification + sound services
+        notificationService.init();
+        soundService.init();
+
+        // Start location trail recording (battery-aware)
+        locationTrailService.start();
+
+        // Init BLE mesh (works silently — no crash if unavailable in Expo Go)
+        bleMeshService.init().then(ready => {
+            if (ready) {
+                console.log('[SOSScreen] BLE mesh ready ✅');
+                bleMeshService.startScanning((pkt) => {
+                    console.log('[SOSScreen] Mesh packet received:', pkt.type, 'hops:', pkt.hops);
+                    // Count unique peers from heartbeat packets
+                    if (pkt.type === 'ping') {
+                        setPeerCount(prev => prev + 1);
+                    }
+                    // Alert user when a real SOS comes in from a nearby device
+                    if (pkt.type === 'sos' && pkt.origin !== userId) {
+                        soundService.playSosAlert();
+                        notificationService.notifyNearbySOS({
+                            userName: (pkt.payload as any)?.userName ?? 'Someone',
+                            address: (pkt.payload as any)?.gps?.address,
+                            hops: pkt.hops,
+                        });
+                    }
+                });
+            }
+        });
+
+        return () => {
+            clearInterval(pingInterval);
+            bleMeshService.stopScanning();
+            locationTrailService.stop();
+            batteryService.destroy();
+            removeBatteryListener();
+            if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+            soundService.destroy();
+        };
     }, [checkConnectivity]);
 
     // ── Timer ──
@@ -232,6 +310,59 @@ const SOSScreen: React.FC<Props> = ({ navigation, route }) => {
         }
         return () => { if (timerRef.current) clearInterval(timerRef.current); };
     }, [isActive]);
+
+    // ── Poll for Govt Action (Online: Firebase, Offline: AsyncStorage cache via BLE mesh) ──
+    useEffect(() => {
+        if (!isActive || !sosRecord?.id) return;
+        console.log('[SOS] Starting govtAction poll for:', sosRecord.id);
+        const pollGovtAction = async () => {
+            try {
+                const action = await sosService.getGovtAction(sosRecord.id);
+                if (action && !govtAction) {
+                    // First time receiving — vibrate, play sound AND show push notification!
+                    Vibration.vibrate([0, 200, 100, 200, 100, 400]);
+                    soundService.playGovtActionAlert();
+                    notificationService.notifyGovtAction({
+                        status: action.status,
+                        message: action.message,
+                        officerName: action.officerName,
+                        estimatedArrival: action.estimatedArrival,
+                        campName: action.campName,
+                    });
+                    console.log('[SOS] 🚒 GOVT ACTION RECEIVED!', action.status);
+                }
+                if (action) setGovtAction(action);
+            } catch (e) {
+                console.log('[SOS] Poll error:', e);
+            }
+        };
+        pollGovtAction();
+        const pollMs = batteryService.profile?.firebasePoll || 15_000;
+        console.log('[SOS] Poll interval:', Math.round(pollMs / 1000), 's');
+        const interval = setInterval(pollGovtAction, pollMs);
+        return () => clearInterval(interval);
+    }, [isActive, sosRecord?.id]);
+
+    // ── Heartbeat broadcast (lets nearby users know we exist) ──
+    useEffect(() => {
+        if (!isActive) return;
+        const sendHeartbeat = () => {
+            if (bleMeshService.ready) {
+                const hbPkt = bleMeshService.createSOSPacket(userId, {
+                    type: 'heartbeat',
+                    userId,
+                    userName,
+                    battery: batteryService.level,
+                    timestamp: Date.now(),
+                });
+                hbPkt.type = 'ping';
+                bleMeshService.broadcast(hbPkt).catch(() => { });
+            }
+        };
+        sendHeartbeat();
+        heartbeatRef.current = setInterval(sendHeartbeat, batteryService.profile.heartbeat);
+        return () => { if (heartbeatRef.current) clearInterval(heartbeatRef.current); };
+    }, [isActive, userId, userName]);
 
     // ── Activate SOS ──
     const activateSOS = useCallback(async () => {
@@ -281,9 +412,41 @@ const SOSScreen: React.FC<Props> = ({ navigation, route }) => {
             setSosStatus('queued'); // No contacts yet
         }
 
-        // 3. Try sync to Firebase (gateway pattern — works when internet available)
+        // 3. Try sync to Firebase (gateway pattern)
         const { flushed } = await sosService.flushSyncQueue();
         setSynced(flushed > 0);
+
+        // 4. Upload GPS trail alongside SOS
+        try {
+            await locationTrailService.uploadTrail(record.id, 60);
+            console.log('[Trail] Location trail uploaded ✅');
+        } catch { console.log('[Trail] Upload skipped'); }
+
+        // 5. BLE Mesh Broadcast — relay SOS to nearby SafeConnect devices
+        try {
+            const bleReady = bleMeshService.ready;
+            if (bleReady) {
+                const blePkt = bleMeshService.createSOSPacket(userId, record);
+                await bleMeshService.broadcast(blePkt);
+                console.log('[BLE] SOS broadcast sent ✅');
+
+                // If battery critical, send a special alert
+                if (batteryService.mode === 'critical') {
+                    const critPkt = bleMeshService.createSOSPacket(userId, {
+                        ...record,
+                        batteryCritical: true,
+                        batteryLevel: Math.round(batteryService.level * 100),
+                    });
+                    await bleMeshService.broadcast(critPkt);
+                    console.log('[BLE] Battery critical alert sent ⚠️');
+                }
+            } else {
+                console.log('[BLE] Not available (Expo Go) — using DTN queue only');
+            }
+        } catch (bleErr) {
+            console.log('[BLE] Broadcast skipped:', bleErr);
+        }
+
         setNotifying(false);
     }, [location, contacts, userId, userName, isConnected]);
 
@@ -319,13 +482,12 @@ const SOSScreen: React.FC<Props> = ({ navigation, route }) => {
                 <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
                     <BackIcon />
                 </TouchableOpacity>
-                <View>
+                <View style={{ flex: 1 }}>
                     <Text style={styles.headerTitle}>Emergency Mode</Text>
                     <Text style={styles.headerSub}>
                         {isActive ? `Active · ${formatTime(elapsedSec)}` : 'Not activated'}
                     </Text>
                 </View>
-                {/* Signal indicator */}
                 <View style={[
                     styles.syncBadge,
                     isConnected === true && styles.syncBadgeOnline,
@@ -335,9 +497,73 @@ const SOSScreen: React.FC<Props> = ({ navigation, route }) => {
                         {isConnected === null ? '⏳ Checking' : isConnected ? '📶 Signal' : '📵 No Signal'}
                     </Text>
                 </View>
+                <View style={[styles.syncBadge, { borderColor: batteryInfo.color, backgroundColor: batteryInfo.color + '18' }]}>
+                    <Text style={[styles.syncBadgeText, { color: batteryInfo.color }]}>
+                        {batteryInfo.icon} {batteryInfo.percent}
+                    </Text>
+                </View>
+                <TouchableOpacity
+                    style={styles.meshBtn}
+                    onPress={() => (navigation as any).navigate('MeshStatus', { userId, userName })}
+                    activeOpacity={0.75}
+                >
+                    <Text style={styles.meshBtnText}>📡</Text>
+                </TouchableOpacity>
             </View>
 
+            {/* ── Status Bar: Peer count + Power mode ── */}
+            {isActive && (
+                <Animated.View entering={FadeInDown.duration(300)} style={styles.statusBar}>
+                    <View style={styles.statusItem}>
+                        <Text style={styles.statusIcon}>📡</Text>
+                        <Text style={styles.statusLabel}>{peerCount} nearby</Text>
+                    </View>
+                    <View style={styles.statusSep} />
+                    <View style={styles.statusItem}>
+                        <Text style={styles.statusIcon}>{batteryInfo.icon}</Text>
+                        <Text style={styles.statusLabel}>{batteryInfo.percent}</Text>
+                    </View>
+                    <View style={styles.statusSep} />
+                    <View style={styles.statusItem}>
+                        <Text style={styles.statusIcon}>{batteryService.mode === 'critical' ? '🪫' : batteryService.mode === 'low' ? '⚡' : '⚡'}</Text>
+                        <Text style={[styles.statusLabel, batteryService.mode === 'critical' && { color: C.red }]}>
+                            {batteryService.mode === 'critical' ? 'POWER SAVE' : batteryService.mode === 'low' ? 'Low Power' : 'Normal'}
+                        </Text>
+                    </View>
+                    <View style={styles.statusSep} />
+                    <View style={styles.statusItem}>
+                        <Text style={styles.statusIcon}>📍</Text>
+                        <Text style={styles.statusLabel}>Trail ON</Text>
+                    </View>
+                </Animated.View>
+            )}
+
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
+
+                {/* ── GOVT RESPONSE NOTIFICATION ── */}
+                {isActive && govtAction && (
+                    <Animated.View entering={FadeInDown.duration(500)} style={styles.govtBanner}>
+                        <View style={styles.govtBannerIcon}>
+                            <Text style={{ fontSize: 28 }}>🚒</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.govtBannerTitle}>Help Is On The Way!</Text>
+                            <Text style={styles.govtBannerMsg}>{govtAction.message}</Text>
+                            {govtAction.estimatedArrival && (
+                                <Text style={styles.govtBannerSub}>⏱ ETA: {govtAction.estimatedArrival}</Text>
+                            )}
+                            {govtAction.campName && (
+                                <Text style={styles.govtBannerSub}>📍 Camp: {govtAction.campName}</Text>
+                            )}
+                            {govtAction.officerName && (
+                                <Text style={styles.govtBannerSub}>👮 Officer: {govtAction.officerName}</Text>
+                            )}
+                            <Text style={styles.govtBannerTime}>
+                                {!isConnected ? '📵 Received via BLE mesh network' : '📶 Received from Govt EOC'}
+                            </Text>
+                        </View>
+                    </Animated.View>
+                )}
 
                 {/* ── No Signal Warning Banner ── */}
                 {isConnected === false && !isActive && (
@@ -629,6 +855,44 @@ const styles = StyleSheet.create({
         borderRadius: 12, padding: 14,
     },
     offlineNoteText: { fontSize: 11, color: C.muted, lineHeight: 17, textAlign: 'center' },
+
+    // Mesh Monitor button (header)
+    meshBtn: {
+        width: 36, height: 36, borderRadius: 10,
+        backgroundColor: 'rgba(21,101,192,0.12)',
+        alignItems: 'center', justifyContent: 'center',
+        marginLeft: 6,
+    },
+    meshBtnText: { fontSize: 18 },
+
+    // Govt response notification banner
+    govtBanner: {
+        flexDirection: 'row', gap: 12,
+        backgroundColor: 'rgba(42,122,90,0.12)',
+        borderWidth: 1.5, borderColor: 'rgba(42,122,90,0.4)',
+        borderRadius: 16, padding: 14, marginBottom: 14,
+    },
+    govtBannerIcon: {
+        width: 50, height: 50, borderRadius: 14,
+        backgroundColor: C.green, alignItems: 'center', justifyContent: 'center',
+        shadowColor: C.green, shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.3, shadowRadius: 8, elevation: 4, flexShrink: 0,
+    },
+    govtBannerTitle: { fontSize: 15, fontWeight: '900', color: C.green, marginBottom: 3 },
+    govtBannerMsg: { fontSize: 13, color: C.brown, fontWeight: '600', lineHeight: 18, marginBottom: 6 },
+    govtBannerSub: { fontSize: 11, color: C.green, fontWeight: '600', marginTop: 3 },
+    govtBannerTime: { fontSize: 10, color: C.muted, marginTop: 6, fontWeight: '500' },
+
+    // Status bar (battery, peers, power mode, trail)
+    statusBar: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+        backgroundColor: 'rgba(44,26,14,0.04)', paddingVertical: 6, paddingHorizontal: 12,
+        gap: 6,
+    },
+    statusItem: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+    statusIcon: { fontSize: 11 },
+    statusLabel: { fontSize: 10, fontWeight: '700', color: C.muted, letterSpacing: 0.3 },
+    statusSep: { width: 1, height: 12, backgroundColor: 'rgba(44,26,14,0.12)', marginHorizontal: 4 },
 });
 
 export default SOSScreen;

@@ -40,15 +40,35 @@
         "CHANGE_WIFI_STATE",
         "ACCESS_NETWORK_STATE",
         "SEND_SMS",
-        "READ_PHONE_STATE"
-      ]
+        "READ_PHONE_STATE",
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_CONNECT"
+      ],
+      "package": "com.abhinav031.safeconnect"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "expo-font",
-      "expo-sms"
-    ]
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": true,
+          "modes": [
+            "peripheral",
+            "central"
+          ],
+          "bluetoothAlwaysPermission": "Allow SafeConnect to use Bluetooth for offline mesh communication between nearby devices during disasters"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "af96e610-feb5-4781-a333-116a3cc6349d"
+      }
+    },
+    "owner": "abhinav031"
   }
 }

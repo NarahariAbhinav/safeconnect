@@ -83,6 +83,18 @@ export type SyncQueueItem =
     | { type: 'needs'; data: NeedsReport }
     | { type: 'resource'; data: ResourceOffer };
 
+// ─── Govt Action (response from EOC to user) ─────────────────────────────────
+export interface GovtAction {
+    sosId: string;
+    status: 'rescue_dispatched' | 'camp_assigned' | 'acknowledged' | 'resolved';
+    message: string;            // Human-readable update for the user
+    dispatchedAt: number;       // Timestamp from govt EOC
+    campName?: string;          // If a camp is assigned
+    campAddress?: string;
+    officerName?: string;
+    estimatedArrival?: string;  // e.g. "20 minutes"
+}
+
 // ─── Storage Keys ───────────────────────────────────────────────────────
 const KEY_ACTIVE_SOS = 'safeconnect_active_sos';
 const KEY_SOS_HISTORY = 'safeconnect_sos_history';
@@ -90,10 +102,11 @@ const KEY_NEEDS_REPORTS = 'safeconnect_needs_reports';
 const KEY_RESOURCE_OFFERS = 'safeconnect_resource_offers';
 const KEY_RELIEF_CAMPS = 'safeconnect_relief_camps';
 const KEY_SYNC_QUEUE = 'safeconnect_sync_queue';
+const KEY_GOVT_ACTIONS = 'safeconnect_govt_actions';   // cached govt responses (offline)
 
-// ─── Firebase config (replace with your project's config) ────────────────
-// Free tier of Firebase Realtime DB — no billing needed for college project
-const FIREBASE_URL = 'https://safeconnect-demo-default-rtdb.firebaseio.com';
+// ─── Firebase config ──────────────────────────────────────────────────────
+// Firebase Realtime Database — Free Tier (Asia Singapore region)
+const FIREBASE_URL = 'https://safeconnect-f509c-default-rtdb.asia-southeast1.firebasedatabase.app';
 
 // ─── Helper ─────────────────────────────────────────────────────────────
 function genId(): string {
@@ -284,6 +297,66 @@ async function offerResource(
     return offer;
 }
 
+// ─── Govt Action ─────────────────────────────────────────────────────────────
+
+/**
+ * getGovtAction — tries Firebase first (online),
+ * falls back to AsyncStorage cache (offline).
+ * Called by SOSScreen every 15s to show the user govt response.
+ */
+async function getGovtAction(sosId: string): Promise<GovtAction | null> {
+    // Try Firebase (with 5s timeout so slow networks don't block)
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        const res = await fetch(`${FIREBASE_URL}/soss/${sosId}/govtAction.json`, {
+            signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (res.ok) {
+            const data = await res.json();
+            if (data && data.status) {
+                console.log('[GovtAction] ✅ Received from Firebase:', data.status, '-', data.message?.slice(0, 40));
+                // Cache it locally for offline use
+                const raw = await AsyncStorage.getItem(KEY_GOVT_ACTIONS);
+                const cache: Record<string, GovtAction> = raw ? JSON.parse(raw) : {};
+                cache[sosId] = data as GovtAction;
+                await AsyncStorage.setItem(KEY_GOVT_ACTIONS, JSON.stringify(cache));
+                return data as GovtAction;
+            } else {
+                console.log('[GovtAction] No response yet for SOS:', sosId);
+            }
+        }
+    } catch (e: any) {
+        console.log('[GovtAction] Fetch failed (offline?):', e?.message?.slice(0, 50));
+    }
+
+    // Offline fallback — return cached action if BLE mesh relayed it
+    try {
+        const raw = await AsyncStorage.getItem(KEY_GOVT_ACTIONS);
+        if (raw) {
+            const cache: Record<string, GovtAction> = JSON.parse(raw);
+            const cached = cache[sosId] ?? null;
+            if (cached) console.log('[GovtAction] Using cached action:', cached.status);
+            return cached;
+        }
+    } catch { /* storage error */ }
+    return null;
+}
+
+/**
+ * storeGovtActionFromMesh — called when BLE mesh delivers a govt action packet
+ * to an offline device. Stores it in AsyncStorage so SOSScreen can show it.
+ */
+async function storeGovtActionFromMesh(action: GovtAction): Promise<void> {
+    try {
+        const raw = await AsyncStorage.getItem(KEY_GOVT_ACTIONS);
+        const cache: Record<string, GovtAction> = raw ? JSON.parse(raw) : {};
+        cache[action.sosId] = action;
+        await AsyncStorage.setItem(KEY_GOVT_ACTIONS, JSON.stringify(cache));
+    } catch { /* storage error */ }
+}
+
 async function getResourceOffers(): Promise<ResourceOffer[]> {
     const raw = await AsyncStorage.getItem(KEY_RESOURCE_OFFERS);
     return raw ? JSON.parse(raw) : [];
@@ -365,6 +438,10 @@ export const sosService = {
     getNeedsReports,
     offerResource,
     getResourceOffers,
+
+    // Govt Action (response to user)
+    getGovtAction,
+    storeGovtActionFromMesh,
 
     // Relief
     getReliefCamps,
