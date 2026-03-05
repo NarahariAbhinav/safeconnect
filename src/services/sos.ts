@@ -17,6 +17,8 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getTrustedContacts } from './contacts';
+import notificationService from './notificationService';
 
 // ─── Types ─────────────────────────────────────────────────────────────
 
@@ -193,6 +195,29 @@ async function activateSOS(
 
     // Try immediate sync (fire-and-forget)
     flushSyncQueue().catch(() => { });
+
+    // Send SMS alerts to emergency contacts (if available)
+    try {
+        const allContacts = await getTrustedContacts();
+        const selectedContacts = allContacts.filter(c => contactIds.includes(c.id));
+        const phoneNumbers = selectedContacts.map(c => c.phone).filter(p => p);
+
+        if (phoneNumbers.length > 0) {
+            const locationUrl = `https://maps.google.com/?q=${gps.latitude},${gps.longitude}`;
+            const smsMessage = `🆘 EMERGENCY: ${userName} needs help!\n📍 Location: ${gps.address || locationUrl}\nRespond to SafeConnect app or click: ${locationUrl}`;
+            
+            // Send SMS in background (non-blocking)
+            notificationService.sendSMSAlert(phoneNumbers, smsMessage)
+                .then(success => {
+                    console.log('[SOS] SMS alerts', success ? 'sent' : 'failed to send');
+                })
+                .catch(e => {
+                    console.error('[SOS] SMS alert error:', e);
+                });
+        }
+    } catch (e) {
+        console.error('[SOS] Failed to send SMS alerts:', e);
+    }
 
     return record;
 }

@@ -2,15 +2,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import React, { Component, useEffect, useState } from 'react';
-import { StatusBar, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { LogBox, StatusBar, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Text } from 'react-native-paper';
 import Animated, {
-  Easing,
-  useAnimatedStyle,
-  useSharedValue,
-  withRepeat,
-  withSequence,
-  withTiming,
+    Easing,
+    useAnimatedStyle,
+    useSharedValue,
+    withRepeat,
+    withSequence,
+    withTiming,
 } from 'react-native-reanimated';
 import Svg, { Circle, Line } from 'react-native-svg';
 import ContactDetailScreen from './src/screens/ContactDetailScreen';
@@ -27,8 +27,15 @@ import ResourceOfferScreen from './src/screens/ResourceOfferScreen';
 import SignupScreen from './src/screens/SignupScreen';
 import SOSScreen from './src/screens/SOSScreen';
 import WelcomeScreen from './src/screens/WelcomeScreen';
+import { bleMeshService } from './src/services/ble/BLEMeshService';
 import { notificationService } from './src/services/notificationService';
 import { soundService } from './src/services/soundService';
+
+// Suppress known Expo Go warnings for features that need a dev build
+LogBox.ignoreLogs([
+  'Cannot find native module \'ExpoPushTokenManager\'',
+  'expo-notifications',
+]);
 
 const Stack = createNativeStackNavigator();
 
@@ -201,9 +208,22 @@ const App = () => {
 
     determineInitialRoute();
 
-    // Init notification permission + sound on startup
+    // ── Init services on app startup ──
     notificationService.init();
     soundService.init();
+    
+    // ── Init BLE Mesh (non-blocking) ──
+    // This initializes the Bluetooth adapter but doesn't start scanning yet
+    // Scanning will be started from HomeScreen after permissions are granted
+    bleMeshService.init().then(ready => {
+      if (ready) {
+        console.log('[App] BLE Mesh initialized successfully');
+      } else {
+        console.warn('[App] BLE Mesh could not initialize - Bluetooth might be disabled or permissions not granted');
+      }
+    }).catch(err => {
+      console.error('[App] BLE Mesh initialization error:', err);
+    });
   }, []);
 
   if (!isReady) {

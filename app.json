@@ -53,6 +53,22 @@
     "plugins": [
       "expo-font",
       [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#C62828",
+          "defaultChannel": "safeconnect_alerts"
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "SafeConnect needs location to track your position during emergencies and record GPS trails.",
+          "locationAlwaysPermission": "SafeConnect uses background location to keep your SOS trail active.",
+          "locationWhenInUsePermission": "SafeConnect uses your location for emergency alerts and mesh networking."
+        }
+      ],
+      [
         "react-native-ble-plx",
         {
           "isBackgroundEnabled": true,

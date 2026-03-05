@@ -50,33 +50,52 @@ class BLEMeshServiceClass {
     private isScanning: boolean = false;
     private listeners: ((pkt: MeshPacket) => void)[] = [];
     private _ready: boolean = false;
+    public _peerCount: number = 0;  // Tracks nearby connected peers
+    private connectedDevices: Set<string> = new Set();  // Track connected device IDs
 
     // ── Init ──────────────────────────────────────────────────────────────
     async init(): Promise<boolean> {
         try {
             this.manager = new BleManager();
+            console.log('[BLE] Manager created, waiting for Bluetooth state...');
 
             return new Promise<boolean>(resolve => {
+                const timeoutId = setTimeout(() => {
+                    console.warn('[BLE] Init timeout — Bluetooth may be disabled or permissions not granted');
+                    resolve(false);
+                }, 10000);
+
                 const sub = this.manager!.onStateChange(state => {
+                    console.log('[BLE] Bluetooth state changed:', state);
                     if (state === State.PoweredOn) {
+                        clearTimeout(timeoutId);
                         sub.remove();
                         this._ready = true;
-                        console.log('[BLE] Ready ✅');
+                        console.log('[BLE] ✅ Ready - Bluetooth is ON');
                         resolve(true);
-                    } else if (state === State.PoweredOff || state === State.Unauthorized) {
+                    } else if (state === State.PoweredOff) {
+                        clearTimeout(timeoutId);
                         sub.remove();
-                        console.warn('[BLE] Not available:', state);
+                        console.warn('[BLE] ❌ Bluetooth is OFF — user needs to enable it');
                         resolve(false);
+                    } else if (state === State.Unauthorized) {
+                        clearTimeout(timeoutId);
+                        sub.remove();
+                        console.warn('[BLE] ❌ Bluetooth permissions not granted');
+                        resolve(false);
+                    } else if (state === State.Unknown) {
+                        console.warn('[BLE] ⏳ Bluetooth state unknown — waiting...');
                     }
                 }, true);
             });
         } catch (e) {
-            console.error('[BLE] Init failed:', e);
+            console.error('[BLE] Fatal error during init:', e);
             return false;
         }
     }
 
     get ready() { return this._ready; }
+    getPeerCount(): number { return this._peerCount; }
 
     // ── Broadcast a packet (Peripheral/Advertising via GATT characteristic)
     // Note: react-native-ble-plx is Central-only on Android.
@@ -104,6 +123,16 @@ class BLEMeshServiceClass {
         this.isScanning = false;
         console.log('[BLE] Scanning stopped');
     }
+
+    // ── Public listener management ─────────────────────────────────────────
+    addListener(cb: (pkt: MeshPacket) => void): void {
+        if (!this.listeners.includes(cb)) this.listeners.push(cb);
+    }
+
+    removeListener(cb: (pkt: MeshPacket) => void): void {
+        this.listeners = this.listeners.filter(l => l !== cb);
+    }
+
 
     // ── Internal: scan for SafeConnect GATT service, connect, read packet ──
     private _scan(): void {
@@ -136,18 +165,32 @@ class BLEMeshServiceClass {
     private async _connectAndRead(device: Device): Promise<void> {
         try {
             const connected = await device.connect({ timeout: 8000 });
+            
+            // Track this device as connected
+            this.connectedDevices.add(device.id);
+            this._peerCount = this.connectedDevices.size;
+            console.log(`[BLE] Connected to peer ${device.id}. Total peers: ${this._peerCount}`);
+
             await connected.discoverAllServicesAndCharacteristics();
 
             const chars: Characteristic[] = await connected.characteristicsForService(SC_SERVICE_UUID);
             const char = chars.find(c => c.uuid.toLowerCase() === SC_CHAR_UUID.toLowerCase());
             if (!char) {
                 await connected.cancelConnection();
+                // Remove from tracking
+                this.connectedDevices.delete(device.id);
+                this._peerCount = this.connectedDevices.size;
                 return;
             }
 
             // Read the characteristic value (Base64 encoded JSON)
             const read = await char.read();
-            if (!read.value) { await connected.cancelConnection(); return; }
+            if (!read.value) { 
+                await connected.cancelConnection();
+                this.connectedDevices.delete(device.id);
+                this._peerCount = this.connectedDevices.size;
+                return;
+            }
 
             const raw = Buffer.from(read.value, 'base64').toString('utf8');
             const pkt: MeshPacket = JSON.parse(raw);
@@ -161,10 +204,18 @@ class BLEMeshServiceClass {
             }
 
             await connected.cancelConnection();
+            
+            // Remove from tracking after disconnect
+            this.connectedDevices.delete(device.id);
+            this._peerCount = this.connectedDevices.size;
+            
             await this._handleIncoming(pkt);
         } catch (e: any) {
             // Connection errors are common in BLE — just log and move on
             console.log('[BLE] Connection error for', device.id, ':', e?.message ?? e);
+            // Clean up tracking on error
+            this.connectedDevices.delete(device.id);
+            this._peerCount = this.connectedDevices.size;
         }
     }
 

@@ -17,6 +17,7 @@ import {
 import { Text } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
+import { bleBackgroundRelayService } from '../services/ble/BLEBackgroundRelayService';
 import { bleMeshService } from '../services/ble/BLEMeshService';
 import { ChatMessage, chatService } from '../services/chatService';
 import { contactsService, TrustedContact } from '../services/contacts';
@@ -58,6 +59,7 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
     const [online, setOnline] = useState<boolean | null>(null);
     const flatRef = useRef<FlatList<ChatMessage>>(null);
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const messagesRef = useRef<ChatMessage[]>([]); // always current messages for stale-closure-safe polling
 
     // ── Load contacts ──────────────────────────────────────────
     useEffect(() => {
@@ -79,24 +81,76 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
     const openChat = useCallback(async (contact: TrustedContact) => {
         setContact(contact);
         setMessages([]);
+        messagesRef.current = [];
         setScreen('chat');
-        const msgs = await chatService.getMessages(userId, contact.id);
-        setMessages(msgs);
+
+        // Load local messages first (instant)
+        const localMsgs = await chatService.getMessages(userId, contact.id);
+        setMessages(localMsgs);
+        messagesRef.current = localMsgs;
         setTimeout(() => flatRef.current?.scrollToEnd({ animated: false }), 100);
+
         if (pollRef.current) clearInterval(pollRef.current);
         pollRef.current = setInterval(async () => {
-            const lastTs = msgs[msgs.length - 1]?.createdAt ?? 0;
+            // Use ref for latest timestamp — avoids stale closure bug
+            const current = messagesRef.current;
+            const lastTs = current.length > 0 ? Math.max(...current.map(m => m.createdAt)) : 0;
             const fresh = await chatService.pollNewMessages(userId, contact.id, lastTs);
             if (fresh.length > 0) {
                 setMessages(prev => {
                     const ids = new Set(prev.map(m => m.id));
-                    const merged = [...prev, ...fresh.filter(m => !ids.has(m.id))].sort((a, b) => a.createdAt - b.createdAt);
+                    const merged = [...prev, ...fresh.filter(m => !ids.has(m.id))]
+                        .sort((a, b) => a.createdAt - b.createdAt);
+                    messagesRef.current = merged;
                     return merged;
                 });
                 setTimeout(() => flatRef.current?.scrollToEnd({ animated: true }), 100);
             }
-        }, 5000);
+        }, 3000); // Poll every 3s for faster updates
     }, [userId]);
+
+    // ── BLE listener: update chat live when a mesh packet arrives ──
+    useEffect(() => {
+        if (!activeContact) return;
+        const roomId = chatService.getRoomId(userId, activeContact.id);
+
+        const handleBlePacket = (pkt: any) => {
+            if (pkt.type !== 'chat') return;
+            try {
+                const { roomId: pktRoom, message } = JSON.parse(pkt.payload);
+                if (pktRoom !== roomId || !message) return;
+                
+                console.log('[MeshChat] 📦 Received chat packet via BLE mesh:', message.id);
+                
+                setMessages(prev => {
+                    if (prev.some(m => m.id === message.id)) return prev;
+                    const merged = [...prev, { ...message, status: 'delivered' }]
+                        .sort((a: any, b: any) => a.createdAt - b.createdAt);
+                    messagesRef.current = merged;
+                    return merged;
+                });
+                setTimeout(() => flatRef.current?.scrollToEnd({ animated: true }), 100);
+            } catch (e) {
+                console.warn('[MeshChat] Could not parse BLE chat packet:', e);
+            }
+        };
+
+        // Register BLE listener
+        bleMeshService.addListener(handleBlePacket);
+        console.log('[MeshChat] BLE listener registered for room:', roomId);
+
+        // Trigger a relay attempt to send any pending messages
+        if (bleBackgroundRelayService.active) {
+            bleBackgroundRelayService.forceRelay().catch(e => {
+                console.warn('[MeshChat] Force relay failed:', e);
+            });
+        }
+
+        return () => {
+            bleMeshService.removeListener(handleBlePacket);
+            console.log('[MeshChat] BLE listener unregistered');
+        };
+    }, [activeContact, userId]);
 
     useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
@@ -106,22 +160,33 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
         const text = inputText.trim();
         setInputText('');
         setSending(true);
-        const msg = await chatService.sendMessage(userId, userName, activeContact.id, activeContact.name, text);
-        setMessages(prev => [...prev, msg]);
 
-        // Also broadcast via BLE mesh for offline delivery
-        if (bleMeshService.ready) {
-            try {
-                const pkt = bleMeshService.createChatPacket(userId, msg.roomId, msg);
-                await bleMeshService.broadcast(pkt);
-                console.log('[MeshChat] Message broadcast via BLE mesh');
-            } catch (e) {
-                console.log('[MeshChat] BLE broadcast skipped');
+        try {
+            // Store message locally first
+            const msg = await chatService.sendMessage(userId, userName, activeContact.id, activeContact.name, text);
+            setMessages(prev => [...prev, msg]);
+
+            // Broadcast via BLE mesh for offline delivery
+            // This is critical so offline users can communicate
+            if (bleMeshService.ready) {
+                try {
+                    console.log('[MeshChat] Broadcasting message via BLE mesh (offline safe)');
+                    const pkt = bleMeshService.createChatPacket(userId, msg.roomId, msg);
+                    // Queue for relay + try to send immediately
+                    await bleMeshService.broadcast(pkt);
+                    console.log('[MeshChat] Message queued for BLE mesh relay ✅');
+                } catch (e) {
+                    console.warn('[MeshChat] BLE mesh unavailable, but message saved locally:', (e as any)?.message);
+                }
+            } else {
+                console.warn('[MeshChat] BLE not ready, message saved locally only');
             }
+        } catch (e) {
+            console.error('[MeshChat] Send failed:', e);
+        } finally {
+            setSending(false);
+            setTimeout(() => flatRef.current?.scrollToEnd({ animated: true }), 100);
         }
-
-        setSending(false);
-        setTimeout(() => flatRef.current?.scrollToEnd({ animated: true }), 100);
     };
 
     const formatTime = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });

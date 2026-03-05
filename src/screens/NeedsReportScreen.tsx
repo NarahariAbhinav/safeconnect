@@ -55,7 +55,9 @@ type ParamList = {
 type Props = NativeStackScreenProps<ParamList, 'NeedsReport'>;
 
 const NeedsReportScreen: React.FC<Props> = ({ navigation, route }) => {
-    const { userId, userName, location } = route.params;
+    const userId = route.params?.userId ?? 'anonymous';
+    const userName = route.params?.userName ?? 'User';
+    const location = route.params?.location ?? null;
 
     const [selectedNeeds, setSelectedNeeds] = useState<NeedCategory[]>([]);
     const [peopleCount, setPeopleCount] = useState('1');

@@ -51,7 +51,8 @@ interface LogEntry {
 }
 
 const MeshStatusScreen: React.FC<Props> = ({ navigation, route }) => {
-    const { userId, userName } = route.params;
+    const userId = route.params?.userId ?? 'anonymous';
+    const userName = route.params?.userName ?? 'User';
 
     const [bleReady, setBleReady] = useState<boolean | null>(null);  // null = initialising
     const [scanning, setScanning] = useState(false);

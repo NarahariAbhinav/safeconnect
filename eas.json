@@ -17,7 +17,20 @@
         "preview": {
             "distribution": "internal",
             "android": {
+                "buildType": "apk",
+                "gradleCommand": ":app:assembleRelease"
+            },
+            "env": {
+                "APP_ENV": "preview"
+            }
+        },
+        "apk": {
+            "distribution": "internal",
+            "android": {
                 "buildType": "apk"
+            },
+            "env": {
+                "APP_ENV": "production"
             }
         },
         "production": {

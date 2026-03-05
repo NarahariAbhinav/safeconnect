@@ -171,6 +171,18 @@ class ChatServiceClass {
         return local;
     }
 
+    // ── Fetch ALL messages for a room from Firebase (full sync) ────────────
+    async fetchAllFromFirebase(myId: string, contactId: string): Promise<ChatMessage[]> {
+        const roomId = this.getRoomId(myId, contactId);
+        try {
+            const res = await fetch(`${FIREBASE_URL}/chats/${roomId}/messages.json`);
+            if (!res.ok) return [];
+            const data = await res.json();
+            if (!data) return [];
+            return Object.values(data) as ChatMessage[];
+        } catch { return []; }
+    }
+
     // ── Poll for new messages from Firebase ─────────────────────────
     async pollNewMessages(
         myId: string,
@@ -182,14 +194,19 @@ class ChatServiceClass {
         if (!online) return [];
 
         try {
-            const res = await fetch(
-                `${FIREBASE_URL}/chats/${roomId}/messages.json?orderBy="createdAt"&startAt=${since}`
-            );
+            // Fetch ALL messages from Firebase (avoid broken orderBy query with index issues)
+            const res = await fetch(`${FIREBASE_URL}/chats/${roomId}/messages.json`);
             if (!res.ok) return [];
             const data = await res.json();
             if (!data) return [];
             const msgs: ChatMessage[] = Object.values(data);
-            return msgs.filter(m => m.senderId !== myId && m.createdAt > since);
+            // Filter: newer than since AND not sent by me
+            const fresh = msgs.filter(m => m.senderId !== myId && m.createdAt > since);
+            // Save any new ones locally
+            for (const m of fresh) {
+                await this._saveMessageLocally(roomId, m);
+            }
+            return fresh;
         } catch { return []; }
     }
 

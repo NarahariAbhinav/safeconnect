@@ -11,6 +11,7 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
+import * as SMS from 'expo-sms';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     Alert,
@@ -38,9 +39,18 @@ import Animated, {
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Circle, Defs, Line, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
+import { bleBackgroundRelayService } from '../services/ble/BLEBackgroundRelayService';
+import { bleMeshService } from '../services/ble/BLEMeshService';
 import { TrustedContact, contactsService } from '../services/contacts';
 import { locationService } from '../services/location';
 import LocationSharingModal from './LocationSharingModal_v2';
+
+// expo-intent-launcher is native-only — lazy load to avoid crash in Expo Go
+const getIntentLauncher = (): typeof import('expo-intent-launcher') | null => {
+    try { return require('expo-intent-launcher'); } catch { return null; }
+};
+
+const FIREBASE_URL = 'https://safeconnect-f509c-default-rtdb.asia-southeast1.firebasedatabase.app';
 
 const { width } = Dimensions.get('window');
 
@@ -599,6 +609,32 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
     const [showPermModal, setShowPermModal] = useState(false);
     const [showProfile, setShowProfile] = useState(false);
     const [showLocationSharing, setShowLocationSharing] = useState(false);
+
+    // ── In-App Notification Center ──
+    type AppNotif = { id: string; icon: string; title: string; body: string; time: number; read: boolean };
+    const KEY_NOTIFS = 'safeconnect_notifications';
+    const [showNotifPanel, setShowNotifPanel] = useState(false);
+    const [notifications, setNotifications] = useState<AppNotif[]>([]);
+
+    const loadNotifs = useCallback(async () => {
+        try {
+            const raw = await AsyncStorage.getItem(KEY_NOTIFS);
+            if (raw) setNotifications(JSON.parse(raw));
+        } catch { }
+    }, []);
+
+    const markAllRead = useCallback(async () => {
+        const updated = notifications.map(n => ({ ...n, read: true }));
+        setNotifications(updated);
+        await AsyncStorage.setItem(KEY_NOTIFS, JSON.stringify(updated));
+    }, [notifications]);
+
+    const clearNotifs = useCallback(async () => {
+        setNotifications([]);
+        await AsyncStorage.removeItem(KEY_NOTIFS);
+    }, []);
+
+    const unreadCount = notifications.filter(n => !n.read).length;
     const [showContactPicker, setShowContactPicker] = useState(false);
     const [selectedContacts, setSelectedContacts] = useState<string[]>([]);
     const [activeFeature, setActiveFeature] = useState<'nodes' | 'contacts' | 'alerts' | null>('contacts');
@@ -614,11 +650,65 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
         }, [])
     );
 
+    // Load notifications on mount + poll govt actions every 15s
+    useEffect(() => {
+        loadNotifs();
+
+        const addNotif = async (notif: AppNotif) => {
+            const raw = await AsyncStorage.getItem(KEY_NOTIFS);
+            const existing: AppNotif[] = raw ? JSON.parse(raw) : [];
+            if (existing.some(n => n.id === notif.id)) return;
+            const updated = [notif, ...existing].slice(0, 30);
+            setNotifications(updated);
+            await AsyncStorage.setItem(KEY_NOTIFS, JSON.stringify(updated));
+        };
+
+        const poll = async () => {
+            try {
+                const notifRaw = await AsyncStorage.getItem('safeconnect_lastGovtAction');
+                if (!notifRaw) return;
+                const action = JSON.parse(notifRaw);
+                if (!action?.status || !action?.dispatchedAt) return;
+                const label: Record<string, string> = {
+                    rescue_dispatched: '🚒 Rescue Dispatched!',
+                    camp_assigned: '⛺️ Relief Camp Assigned',
+                    acknowledged: '✅ SOS Acknowledged',
+                    resolved: '✅ SOS Case Resolved',
+                };
+                await addNotif({
+                    id: `govt_${action.dispatchedAt}`,
+                    icon: '🚒',
+                    title: label[action.status] ?? '🚨 Emergency Update',
+                    body: action.message ?? 'Government action received',
+                    time: action.dispatchedAt,
+                    read: false,
+                });
+            } catch { }
+        };
+        poll();
+        const t = setInterval(poll, 15000);
+        return () => clearInterval(t);
+    }, []);
+
     // ── Always show permission modal on every HomeScreen open ──
     useEffect(() => {
         const timer = setTimeout(() => setShowPermModal(true), 600);
         return () => clearTimeout(timer);
     }, []);
+
+    // ── Ensure background relay is active when user is on Home ──
+    // This keeps offline messaging working in the background
+    useFocusEffect(
+        useCallback(() => {
+            console.log('[HomeScreen] Ensuring background relay is running...');
+            if (bleMeshService.ready && !bleBackgroundRelayService.active) {
+                bleBackgroundRelayService.startRelay().catch(e => {
+                    console.warn('[HomeScreen] Could not start background relay:', e);
+                });
+            }
+            // No cleanup needed - we want relay to continue in background
+        }, [])
+    );
 
     // ── Live Location (fetches once, refreshes quietly every 60 s) ──
     const isFetchingRef = useRef(false);
@@ -706,47 +796,58 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
             }
         }
 
-        // ── Step 2: Actually turn ON Bluetooth ────────────────────────
-        // Runtime permissions only allow the app to USE Bluetooth APIs.
-        // To turn the radio ON we must fire the system's REQUEST_ENABLE intent.
+        // ── Step 2: Open Bluetooth Settings via proper Android Intent ──
+        // expo-intent-launcher fires the real system intent — works on all Android ROMs
         try {
-            // This opens Android's "Do you want to turn on Bluetooth?" system dialog.
-            await Linking.openURL('android-app://com.android.settings/.bluetooth.RequestPermissionActivity');
-        } catch {
-            // Fallback: some ROMs block that deep link — use the general BT settings page
-            try {
-                await Linking.openURL('android.settings.BLUETOOTH_SETTINGS');
-            } catch {
-                // Last resort: prompt user to enable manually
-                Alert.alert(
-                    '🔵 Enable Bluetooth',
-                    'Please turn on Bluetooth in your device Settings to enable mesh networking.\n\nSettings → Connections → Bluetooth → ON',
-                    [
-                        { text: 'Open Settings', onPress: () => Linking.openSettings() },
-                        { text: 'Later', style: 'cancel' },
-                    ]
-                );
+            if (Platform.OS === 'android') {
+                const IL = getIntentLauncher();
+                if (IL) {
+                    await IL.startActivityAsync(IL.ActivityAction.BLUETOOTH_SETTINGS);
+                }
             }
+        } catch {
+            // silently ignored — tip dialog below covers this case
         }
 
-        // ── Step 3: After Bluetooth, prompt for WiFi (non-blocking) ──
+        // ── Step 3: Open Location Settings ──
+        setTimeout(async () => {
+            try {
+                if (Platform.OS === 'android') {
+                    const IL = getIntentLauncher();
+                    if (IL) {
+                        await IL.startActivityAsync(IL.ActivityAction.LOCATION_SOURCE_SETTINGS);
+                    }
+                }
+            } catch { }
+        }, 600);
+
+        // ── Step 4: Show clear quick-panel tip ──
         setTimeout(() => {
             Alert.alert(
-                '📶 Enable Wi-Fi',
-                'For best mesh networking range, please also ensure Wi-Fi is turned on.',
+                '📱 Enable 3 Things',
+                'For mesh to work, please turn ON:\n\n' +
+                '🔵  Bluetooth  (swipe down → tap BT icon)\n' +
+                '📍  Location   (swipe down → tap Location)\n' +
+                '📶  Wi-Fi      (swipe down → tap Wi-Fi)\n\n' +
+                'Or tap “Wi-Fi Settings” to open it directly.',
                 [
                     {
-                        text: 'Open Wi-Fi Settings',
+                        text: 'Wi-Fi Settings',
                         onPress: () => {
-                            Linking.openURL('android.settings.WIFI_SETTINGS').catch(() =>
-                                Linking.openSettings()
-                            );
+                            try {
+                                const IL = getIntentLauncher();
+                                if (IL) {
+                                    IL.startActivityAsync(IL.ActivityAction.WIFI_SETTINGS);
+                                } else {
+                                    Linking.openSettings();
+                                }
+                            } catch { Linking.openSettings(); }
                         },
                     },
-                    { text: 'Already On', style: 'cancel' },
+                    { text: 'Got It ✔', style: 'cancel' },
                 ]
             );
-        }, 1500); // slight delay so BT dialog doesn't clash
+        }, 1500);
     };
 
     // ── LOGOUT ──
@@ -779,13 +880,49 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
         );
     };
 
-    const handleLocationShare = (duration: number) => {
-        const durationText = duration === -1 ? 'continuous' : `${duration} minutes`;
-        Alert.alert(
-            '✅ Location Shared!',
-            `Your location is now being shared for ${durationText}.\n\nYour trusted contacts can see your real-time location.`,
-            [{ text: 'OK' }]
-        );
+    const handleLocationShare = async (duration: number) => {
+        try {
+            // Get current location
+            const loc = await locationService.getCurrentLocation();
+            if (!loc) { Alert.alert('Error', 'Could not get your location. Try again.'); return; }
+
+            const mapsLink = `https://maps.google.com/?q=${loc.latitude},${loc.longitude}`;
+            const durationText = duration === -1 ? 'until I stop sharing' : `for ${duration} minutes`;
+            const message =
+                `📍 ${userName} is sharing their live location ${durationText}\n` +
+                `🔗 ${mapsLink}\n` +
+                `Coordinates: ${loc.latitude.toFixed(5)}, ${loc.longitude.toFixed(5)}\n\n` +
+                `Sent via SafeConnect`;
+
+            // Get selected contacts' phone numbers
+            const phonesToSend = trustedContacts
+                .filter(c => selectedContacts.includes(c.id) && c.phone)
+                .map(c => c.phone as string);
+
+            if (phonesToSend.length === 0) {
+                // fallback: open SMS with all contacts
+                const isAvail = await SMS.isAvailableAsync();
+                if (isAvail) {
+                    await SMS.sendSMSAsync([], message);
+                } else {
+                    Alert.alert('Sent!', `Location link: ${mapsLink}`);
+                }
+                return;
+            }
+
+            const isAvail = await SMS.isAvailableAsync();
+            if (isAvail) {
+                await SMS.sendSMSAsync(phonesToSend, message);
+                Alert.alert('✅ Location Sent!', `SMS sent to ${phonesToSend.length} contact${phonesToSend.length > 1 ? 's' : ''} with your live location link.`);
+            } else {
+                // fallback: open maps link
+                await Linking.openURL(mapsLink);
+                Alert.alert('📍 Location Ready', `Share this link manually:\n${mapsLink}`);
+            }
+        } catch (e) {
+            console.log('[LocationShare] Error:', e);
+            Alert.alert('Error', 'Could not share location. Please try again.');
+        }
     };
 
     const getGreeting = () => {
@@ -795,21 +932,56 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
         return 'Good Evening';
     };
 
-    const nearbyNodes = [
-        { name: 'Node Alpha', distance: '0.3 km', signal: 3, status: 'online' as const },
-        { name: 'Node Beta', distance: '0.8 km', signal: 2, status: 'online' as const },
-        { name: 'Node Gamma', distance: '1.4 km', signal: 1, status: 'online' as const },
-        { name: 'Node Delta', distance: '2.1 km', signal: 0, status: 'offline' as const },
-    ];
+    // ── Real BLE Peer Count ──
+    const [blePeerCount, setBlePeerCount] = useState(0);
+    useEffect(() => {
+        // Poll BLE peer count every 10s
+        const getBleCount = () => {
+            try { setBlePeerCount((bleMeshService as any)._peerCount ?? 0); } catch { }
+        };
+        getBleCount();
+        const t = setInterval(getBleCount, 10000);
+        return () => clearInterval(t);
+    }, []);
+
+    // ── Real Community Alerts from Firebase ──
+    type CommunityAlert = { type: 'danger' | 'warning' | 'info'; title: string; message: string; time: string };
+    const [communityAlerts, setCommunityAlerts] = useState<CommunityAlert[]>([
+        { type: 'info', title: 'Mesh Ready', message: 'BLE mesh initialized — ready for offline use', time: 'now' },
+    ]);
+
+    useEffect(() => {
+        // Fetch real active SOS and needs from Firebase
+        fetch(`${FIREBASE_URL}/soss.json`)
+            .then(r => r.json())
+            .then(data => {
+                if (!data) return;
+                const alerts: CommunityAlert[] = Object.values(data as Record<string, any>)
+                    .filter((s: any) => s.isActive)
+                    .slice(0, 5)
+                    .map((s: any) => ({
+                        type: 'danger' as const,
+                        title: `🆘 SOS: ${s.userName || 'Unknown'}`,
+                        message: s.gps?.address || `${s.gps?.latitude?.toFixed(4)}, ${s.gps?.longitude?.toFixed(4)}`,
+                        time: s.activatedAt ? `${Math.round((Date.now() - s.activatedAt) / 60000)}m ago` : 'recently',
+                    }));
+                if (alerts.length > 0) setCommunityAlerts(alerts);
+            })
+            .catch(() => { /* offline — keep defaults */ });
+    }, []);
+
+    // Nearby nodes — built from BLE peer count
+    const nearbyNodes = blePeerCount === 0
+        ? [{ name: 'Scanning...', distance: 'BLE scan active', signal: 0, status: 'offline' as const }]
+        : Array.from({ length: blePeerCount }, (_, i) => ({
+            name: `SafeConnect Node ${i + 1}`,
+            distance: `~${(i * 0.5 + 0.2).toFixed(1)} km`,
+            signal: Math.max(0, 3 - i),
+            status: 'online' as const,
+        }));
 
     // contacts come from trustedContacts state (real device contacts)
     const contactsForDisplay = trustedContacts.slice(0, 5); // show top 5
-
-    const communityAlerts = [
-        { type: 'danger' as const, title: 'Road Blocked', message: 'MG Road near station — avoid area', time: '5m ago' },
-        { type: 'warning' as const, title: 'Power Outage', message: 'Sector 4 experiencing outage', time: '22m ago' },
-        { type: 'info' as const, title: 'Mesh Active', message: '14 nodes online in your area', time: '1h ago' },
-    ];
 
     return (
         <SafeAreaView style={styles.container}>
@@ -954,9 +1126,22 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                     </View>
                 </View>
                 <View style={styles.headerRight}>
-                    <TouchableOpacity style={styles.notifBtn} activeOpacity={0.7}>
+                    <TouchableOpacity
+                        style={styles.notifBtn}
+                        activeOpacity={0.7}
+                        onPress={() => {
+                            setShowNotifPanel(true);
+                            markAllRead();
+                        }}
+                    >
                         <BellIcon color={COLORS.brown} />
-                        <View style={styles.notifDot} />
+                        {unreadCount > 0 && (
+                            <View style={styles.notifDot}>
+                                <Text style={styles.notifBadgeText}>
+                                    {unreadCount > 9 ? '9+' : unreadCount}
+                                </Text>
+                            </View>
+                        )}
                     </TouchableOpacity>
                     {/* Avatar → opens Profile sheet */}
                     <TouchableOpacity
@@ -1089,11 +1274,14 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                         />
                         <QuickAction
                             icon={<ShieldIcon color={COLORS.green} />}
-                            label="Safe Zone"
-                            sublabel="Set perimeter"
+                            label="Mesh Status"
+                            sublabel="BLE network"
                             bgColor={COLORS.greenLight}
                             borderColor={COLORS.green}
-                            onPress={() => { }}
+                            onPress={() => navigation.navigate('MeshStatus' as any, {
+                                userId: String(user?.id ?? user?.email ?? 'anonymous'),
+                                userName: String(userName ?? 'User'),
+                            })}
                         />
                     </View>
                 </Animated.View>
@@ -1212,8 +1400,8 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
             <View style={styles.bottomNav}>
                 {[
                     { id: 'home', label: 'Home', icon: (c: string) => <HomeNavIcon color={c} /> },
-                    { id: 'map', label: 'Map', icon: (c: string) => <MapNavIcon color={c} /> },
-                    { id: 'alerts', label: 'Alerts', icon: (c: string) => <AlertIcon color={c} size={22} /> },
+                    { id: 'map', label: 'Relief Map', icon: (c: string) => <MapNavIcon color={c} /> },
+                    { id: 'alerts', label: 'Report Need', icon: (c: string) => <AlertIcon color={c} size={22} /> },
                     { id: 'profile', label: 'Profile', icon: (c: string) => <ProfileNavIcon color={c} /> },
                 ].map(tab => {
                     const isActive = activeTab === tab.id;
@@ -1225,6 +1413,14 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                                 setActiveTab(tab.id);
                                 if (tab.id === 'profile') {
                                     setShowProfile(true);
+                                } else if (tab.id === 'map') {
+                                    navigation.navigate('ReliefMap' as any, { location: null });
+                                } else if (tab.id === 'alerts') {
+                                    navigation.navigate('NeedsReport' as any, {
+                                        userId: String(user?.id ?? user?.email ?? 'anonymous'),
+                                        userName: String(userName ?? 'User'),
+                                        location: null,
+                                    });
                                 }
                             }}
                             activeOpacity={0.7}
@@ -1485,7 +1681,15 @@ const styles = StyleSheet.create({
     userName: { fontSize: 16, fontWeight: '800', color: COLORS.brown, letterSpacing: -0.3 },
     headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     notifBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: COLORS.cardBg, borderWidth: 1, borderColor: COLORS.cardBorder, alignItems: 'center', justifyContent: 'center' },
-    notifDot: { position: 'absolute', top: 8, right: 8, width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.red, borderWidth: 1.5, borderColor: COLORS.bg },
+    notifDot: {
+        position: 'absolute', top: 6, right: 6,
+        minWidth: 16, height: 16, borderRadius: 8,
+        backgroundColor: COLORS.red,
+        alignItems: 'center', justifyContent: 'center',
+        paddingHorizontal: 3,
+        borderWidth: 1.5, borderColor: COLORS.bg,
+    },
+    notifBadgeText: { fontSize: 9, fontWeight: '800', color: '#fff' },
     avatarBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: COLORS.orange, alignItems: 'center', justifyContent: 'center', shadowColor: COLORS.orange, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 5, elevation: 3 },
     avatarText: { fontSize: 16, fontWeight: '800', color: COLORS.white },
 
@@ -1625,4 +1829,5 @@ const styles = StyleSheet.create({
 });
 
 export default HomeScreen;
+
 
