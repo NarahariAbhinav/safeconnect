@@ -690,10 +690,18 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
         return () => clearInterval(t);
     }, []);
 
-    // ── Always show permission modal on every HomeScreen open ──
+    // ── Show permission modal only on first launch (not every time) ──
     useEffect(() => {
-        const timer = setTimeout(() => setShowPermModal(true), 600);
-        return () => clearTimeout(timer);
+        const checkFirstLaunch = async () => {
+            try {
+                const dismissed = await AsyncStorage.getItem('safeconnect_perms_shown');
+                if (!dismissed) {
+                    const timer = setTimeout(() => setShowPermModal(true), 600);
+                    return () => clearTimeout(timer);
+                }
+            } catch {}
+        };
+        checkFirstLaunch();
     }, []);
 
     // ── Ensure background relay is active when user is on Home ──
@@ -777,6 +785,9 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
 
     const requestAllPermissions = async () => {
         setShowPermModal(false);
+
+        // Mark as shown so it doesn't appear again
+        try { await AsyncStorage.setItem('safeconnect_perms_shown', 'true'); } catch {}
 
         // ── Step 1: Grant runtime permissions (Android only) ──────────
         if (Platform.OS === 'android') {

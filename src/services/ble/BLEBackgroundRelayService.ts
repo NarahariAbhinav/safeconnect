@@ -1,125 +1,74 @@
 /**
- * BLEBackgroundRelayService.ts — Continuous Offline Mesh Relay
+ * BLEBackgroundRelayService.ts — Continuous Offline Relay
  *
- * Automatically relays queued packets every 30 seconds
- * Ensures messages reach peers even when app is in foreground
- *
- * Works in conjunction with BLEMeshService:
- *  - BLEMeshService handles discovery & connection
- *  - BLEBackgroundRelayService ensures continuous attempts
+ * Runs every 30 seconds trying to deliver queued mesh packets to nearby peers.
+ * Works alongside BLEMeshService:
+ *   - BLEMeshService handles connections and incoming packets
+ *   - This service ensures OUTGOING queued packets keep retrying
  */
-
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { bleMeshService } from './BLEMeshService';
 
 class BLEBackgroundRelayServiceClass {
-    private relayInterval: NodeJS.Timeout | null = null;
-    private isRelaying = false;
-    private _active = false;
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private running = false;
+  private _active = false;
 
-    get active() { return this._active; }
+  get active() { return this._active; }
 
-    /**
-     * Start continuous background relay
-     * This keeps trying to find nearby peers and send queued messages
-     */
-    async startRelay(): Promise<void> {
-        if (this.relayInterval) {
-            console.log('[BLERelay] Already running');
-            return;
-        }
+  // Start relay loop — safe to call multiple times
+  async startRelay(): Promise<void> {
+    if (this.timer) return; // already running
 
-        if (!bleMeshService.ready) {
-            console.warn('[BLERelay] BLE not ready yet, waiting...');
-            // Wait up to 5 seconds for BLE to initialize
-            for (let i = 0; i < 5; i++) {
-                if (bleMeshService.ready) break;
-                await new Promise(r => setTimeout(r, 1000));
-            }
-        }
+    console.log('[Relay] Starting background relay (30s interval)');
+    this._active = true;
 
-        if (!bleMeshService.ready) {
-            console.error('[BLERelay] BLE still not ready, cannot start relay');
-            return;
-        }
+    // Try immediately, then every 30s
+    await this._tryRelay();
+    this.timer = setInterval(() => { this._tryRelay(); }, 30_000);
+  }
 
-        console.log('[BLERelay] Starting background relay (every 30s)');
-        this._active = true;
-
-        // Try relay immediately
-        await this._attemptRelay();
-
-        // Then every 30 seconds
-        this.relayInterval = setInterval(async () => {
-            await this._attemptRelay();
-        }, 30000);
+  stopRelay(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
     }
+    this._active = false;
+    console.log('[Relay] Stopped');
+  }
 
-    stopRelay(): void {
-        if (this.relayInterval) {
-            clearInterval(this.relayInterval);
-            this.relayInterval = null;
-            this._active = false;
-            console.log('[BLERelay] Stopped');
-        }
+  // Force an immediate relay attempt (e.g. when screen comes to focus)
+  async forceRelay(): Promise<void> {
+    await this._tryRelay();
+  }
+
+  // Pending packet count
+  async getPendingCount(): Promise<number> {
+    const raw = await AsyncStorage.getItem('ble_relay_queue');
+    if (!raw) return 0;
+    return (JSON.parse(raw) as any[]).length;
+  }
+
+  private async _tryRelay(): Promise<void> {
+    if (this.running) return;
+    if (!bleMeshService.ready) return;
+
+    this.running = true;
+    try {
+      const raw = await AsyncStorage.getItem('ble_relay_queue');
+      if (!raw) return;
+      const queue: any[] = JSON.parse(raw);
+      if (!queue.length) return;
+
+      console.log('[Relay] Attempting to relay', queue.length, 'packet(s)...');
+      // broadcast() will send to all currently connected peers
+      await bleMeshService.broadcast(queue[0]);
+    } catch (e) {
+      console.warn('[Relay] Error:', (e as any)?.message);
+    } finally {
+      this.running = false;
     }
-
-    /**
-     * Get count of pending packets waiting to be relayed
-     */
-    async getPendingCount(): Promise<number> {
-        const raw = await AsyncStorage.getItem('ble_relay_queue');
-        if (!raw) return 0;
-        const queue = JSON.parse(raw);
-        return queue.length ?? 0;
-    }
-
-    /**
-     * Force immediate relay attempt (call when user returns to app or in focus)
-     */
-    async forceRelay(): Promise<void> {
-        console.log('[BLERelay] Force relay triggered');
-        await this._attemptRelay();
-    }
-
-    // ── Internal ──────────────────────────────────────────────────
-
-    private async _attemptRelay(): Promise<void> {
-        if (this.isRelaying || !bleMeshService.ready) return;
-        this.isRelaying = true;
-
-        try {
-            // Get queued packets
-            const queue = await this._getRelayQueue();
-            if (queue.length === 0) {
-                // console.log('[BLERelay] No pending packets');
-                this.isRelaying = false;
-                return;
-            }
-
-            console.log(`[BLERelay] Attempting to relay ${queue.length} packet(s)...`);
-
-            // Try to broadcast the first packet in queue
-            // This will scan for nearby peers and write to them
-            const pkt = queue[0];
-            await bleMeshService.broadcast(pkt);
-
-            // Check queue again - if packet was successfully relayed, it should be cleaned
-            const updatedQueue = await this._getRelayQueue();
-            if (updatedQueue.length < queue.length) {
-                console.log('[BLERelay] Packet relayed successfully');
-            }
-        } catch (e) {
-            console.warn('[BLERelay] Relay attempt error:', (e as any)?.message);
-        } finally {
-            this.isRelaying = false;
-        }
-    }
-
-    private async _getRelayQueue(): Promise<any[]> {
-        const raw = await AsyncStorage.getItem('ble_relay_queue');
-        return raw ? JSON.parse(raw) : [];
-    }
+  }
 }
 
 export const bleBackgroundRelayService = new BLEBackgroundRelayServiceClass();

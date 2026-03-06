@@ -2,14 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 
 // ─── Configuration ────────────────────────────────────────────────
-// The backend URL. When running Expo Go on a physical device,
-// use the LAN IP of the machine running the backend (e.g. 192.168.x.x).
-// For Android emulator on the same machine use 10.0.2.2.
-const API_BASE_URL = 'http://10.0.2.2:5000/api'; // change to your server IP
-
-// Timeout for API calls — if the server doesn't respond within this time,
-// fall back to local/offline auth.
-const API_TIMEOUT_MS = 6000;
+// Auth is fully local (AsyncStorage). No backend server needed.
+// User credentials are stored on-device with SHA-256 hashed passwords.
 
 // ─── Helpers ──────────────────────────────────────────────────────
 const hashPassword = async (password: string): Promise<string> => {
@@ -17,21 +11,6 @@ const hashPassword = async (password: string): Promise<string> => {
     Crypto.CryptoDigestAlgorithm.SHA256,
     password
   );
-};
-
-const fetchWithTimeout = async (
-  url: string,
-  options: RequestInit,
-  timeoutMs = API_TIMEOUT_MS
-): Promise<Response> => {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, { ...options, signal: controller.signal });
-    return res;
-  } finally {
-    clearTimeout(timer);
-  }
 };
 
 // ─── Types ────────────────────────────────────────────────────────
@@ -74,7 +53,7 @@ export const authService = {
     phone: string;
     password: string;
   }): Promise<AuthResult> => {
-    // ── Client-side validation (same regardless of mode) ──
+    // ── Validation ──
     if (!userData.firstName || !userData.phone || !userData.password) {
       return { success: false, error: 'Please fill all required fields' };
     }
@@ -86,41 +65,7 @@ export const authService = {
       return { success: false, error: 'Password must be at least 6 characters' };
     }
 
-    // ── 1) Try backend API ──
-    try {
-      const res = await fetchWithTimeout(`${API_BASE_URL}/auth/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          firstName: userData.firstName,
-          lastName: userData.lastName || '',
-          email: userData.email || undefined,
-          phone: userData.phone,
-          password: userData.password,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        return { success: false, error: data.error || 'Registration failed' };
-      }
-
-      // Server returned success — save session locally
-      const user: User = {
-        id: String(data.user?.id ?? Date.now()),
-        firstName: data.user?.firstName ?? userData.firstName,
-        lastName: data.user?.lastName ?? userData.lastName,
-        email: data.user?.email ?? userData.email,
-        phone: data.user?.phone ?? userData.phone,
-      };
-      await saveSession(user, data.token);
-      return { success: true, user, token: data.token };
-    } catch {
-      // Server unreachable — fall through to local mode
-    }
-
-    // ── 2) Fallback: local AsyncStorage auth (offline mode) ──
+    // ── Local AsyncStorage registration (works fully offline) ──
     try {
       const existingUsers = await AsyncStorage.getItem('safeconnect_users');
       const users: User[] = existingUsers ? JSON.parse(existingUsers) : [];
@@ -167,38 +112,7 @@ export const authService = {
       return { success: false, error: 'Please enter email/phone and password' };
     }
 
-    // ── 1) Try backend API ──
-    try {
-      const res = await fetchWithTimeout(`${API_BASE_URL}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: emailOrPhone.trim(), password }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        // If server explicitly says "Invalid credentials", don't fall back to local
-        if (res.status === 401) {
-          return { success: false, error: data.error || 'Invalid credentials' };
-        }
-        return { success: false, error: data.error || 'Login failed' };
-      }
-
-      const user: User = {
-        id: String(data.user?.id ?? ''),
-        firstName: data.user?.firstName ?? '',
-        lastName: data.user?.lastName ?? '',
-        email: data.user?.email,
-        phone: data.user?.phone ?? emailOrPhone,
-      };
-      await saveSession(user, data.token);
-      return { success: true, user, token: data.token };
-    } catch {
-      // Server unreachable — fall through to local mode
-    }
-
-    // ── 2) Fallback: local AsyncStorage auth ──
+    // ── Local AsyncStorage login (works fully offline) ──
     try {
       const existingUsers = await AsyncStorage.getItem('safeconnect_users');
       if (!existingUsers) {
@@ -243,17 +157,9 @@ export const authService = {
     }
   },
 
-  // Logout — clears local session & tells server (best-effort)
+  // Logout — clears local session
   logout: async (): Promise<{ success: boolean }> => {
     try {
-      const token = await AsyncStorage.getItem('safeconnect_token');
-      // Best-effort server logout
-      if (token) {
-        fetchWithTimeout(`${API_BASE_URL}/auth/logout`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-        }).catch(() => {}); // fire & forget
-      }
       await AsyncStorage.multiRemove(['safeconnect_currentUser', 'safeconnect_token']);
       return { success: true };
     } catch {

@@ -1,6 +1,6 @@
 /**
  * permissionService.ts — Centralized Permission Management
- * Handles BLE, Location, and other runtime permissions with proper verification
+ * Handles Nearby Connections, Location, and other runtime permissions
  */
 
 import { Alert, Linking, PermissionsAndroid, Platform } from 'react-native';
@@ -66,37 +66,46 @@ class PermissionService {
     }
 
     /**
-     * Start mesh scanning after permissions are verified
+     * Start mesh networking after permissions are verified
      */
     async enableMesh(): Promise<boolean> {
         // First, request permissions
         const perms = await this.requestAllPermissions();
 
-        if (!perms.bluetooth) {
-            console.warn('[PermissionService] Bluetooth permission not granted');
-            this._showBTAlert();
+        if (!perms.bluetooth || !perms.location) {
+            console.warn('[PermissionService] Required permissions not granted');
+            if (!perms.bluetooth) this._showBTAlert();
+            if (!perms.location) {
+                Alert.alert(
+                    '❌ Location Required',
+                    'Location permission is needed for mesh networking to discover nearby devices.\n\n' +
+                    'Please grant location access in Settings.',
+                    [
+                        { text: 'Settings', onPress: () => Linking.openSettings() },
+                        { text: 'Later', style: 'cancel' },
+                    ]
+                );
+            }
             return false;
         }
 
-        // Check if BLE service is ready
-        if (!bleMeshService.ready) {
-            console.warn('[PermissionService] BLE service not ready yet');
-            // Wait a bit and try again
-            await new Promise(resolve => setTimeout(resolve, 500));
+        // Initialize mesh networking (starts advertise + discover)
+        const ready = await bleMeshService.init();
 
-            if (!bleMeshService.ready) {
-                Alert.alert(
-                    '❌ Bluetooth Not Available',
-                    'Your device Bluetooth is disabled or not responding. Please:\n\n' +
-                    '1. Swipe down → tap Bluetooth icon to turn ON\n' +
-                    '2. Restart the app\n\n' +
-                    'If that doesn\'t work, restart your phone.'
-                );
-                return false;
-            }
+        if (!ready) {
+            Alert.alert(
+                '❌ Mesh Networking Unavailable',
+                'Could not start mesh networking. Please:\n\n' +
+                '1. Turn ON Bluetooth (swipe down → tap BT icon)\n' +
+                '2. Turn ON Wi-Fi\n' +
+                '3. Turn ON Location\n' +
+                '4. Restart the app\n\n' +
+                'If that doesn\'t work, restart your phone.'
+            );
+            return false;
         }
 
-        // All good - start scanning
+        // All good - start scanning for peers
         console.log('[PermissionService] Starting mesh with permission check passed');
         bleMeshService.startScanning();
 
@@ -107,24 +116,24 @@ class PermissionService {
             '✅ SafeConnect Mesh Enabled',
             'Your device is now broadcasting and scanning for nearby SafeConnect users.\n\n' +
             '📍 SOS alerts and messages can be shared via mesh even without internet!\n\n' +
-            '💡 Keep Bluetooth ON for best results.'
+            '💡 Keep Bluetooth and Wi-Fi ON for best results.'
         );
 
         return true;
     }
 
     /**
-     * Check if BLE is currently enabled without requesting permissions
+     * Check if mesh networking is currently active
      */
     isBLEReady(): boolean {
         return bleMeshService.ready;
     }
 
     /**
-     * Stop mesh scanning
+     * Stop mesh networking
      */
     disableMesh(): void {
-        bleMeshService.stopScanning();
+        bleMeshService.destroy();
     }
 
     /**
@@ -140,11 +149,11 @@ class PermissionService {
         setTimeout(() => {
             const IL = this._getIntentLauncher();
             Alert.alert(
-                '🔵 Enable Bluetooth',
-                'Bluetooth is required for mesh networking.\n\n' +
+                '🔵 Enable Bluetooth & Wi-Fi',
+                'Bluetooth and Wi-Fi are required for mesh networking.\n\n' +
                 'You can either:\n' +
-                '1. Tap "Settings" to enable it now\n' +
-                '2. Or swipe down and tap the Bluetooth icon',
+                '1. Tap "Settings" to enable them now\n' +
+                '2. Or swipe down and tap the Bluetooth & Wi-Fi icons',
                 [
                     {
                         text: 'Settings',

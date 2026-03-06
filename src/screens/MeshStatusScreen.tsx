@@ -1,12 +1,5 @@
 /**
- * MeshStatusScreen.tsx — Live BLE Mesh Debug & Monitor
- *
- * Shows in real-time:
- *  • BLE adapter state (On/Off/Scanning)
- *  • Nearby SafeConnect devices discovered
- *  • Packets received (type, hops, origin)
- *  • Gateway sync status
- *  • Relay queue size
+ * MeshStatusScreen.tsx — Mesh Network Status (User-Friendly)
  */
 
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -16,7 +9,7 @@ import {
     ScrollView,
     StyleSheet,
     TouchableOpacity,
-    View
+    View,
 } from 'react-native';
 import { Text } from 'react-native-paper';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
@@ -43,85 +36,107 @@ const BackIcon = () => (
 type ParamList = { MeshStatus: { userId: string; userName: string } };
 type Props = NativeStackScreenProps<ParamList, 'MeshStatus'>;
 
-interface LogEntry {
+interface ActivityEntry {
     id: string;
     time: string;
-    type: 'info' | 'success' | 'warning' | 'error' | 'packet';
+    icon: string;
     message: string;
+    color: string;
+}
+
+/** Translate a mesh packet type to a human-readable activity message */
+function packetToActivity(pkt: MeshPacket): Pick<ActivityEntry, 'icon' | 'message' | 'color'> {
+    switch (pkt.type) {
+        case 'sos':
+            return { icon: '🆘', message: 'Emergency alert received through the mesh', color: C.red };
+        case 'chat':
+            return { icon: '💬', message: 'A message was relayed through the mesh', color: C.blue };
+        case 'location':
+            return { icon: '📍', message: 'Someone shared their location through the mesh', color: C.orange };
+        default:
+            return { icon: '📡', message: 'Signal received from a nearby device', color: C.green };
+    }
 }
 
 const MeshStatusScreen: React.FC<Props> = ({ navigation, route }) => {
-    const userId = route.params?.userId ?? 'anonymous';
+    const userId  = route.params?.userId   ?? 'anonymous';
     const userName = route.params?.userName ?? 'User';
 
-    const [bleReady, setBleReady] = useState<boolean | null>(null);  // null = initialising
-    const [scanning, setScanning] = useState(false);
-    const [packets, setPackets] = useState<MeshPacket[]>([]);
-    const [logs, setLogs] = useState<LogEntry[]>([]);
-    const logRef = useRef(logs);
-    logRef.current = logs;
+    const [bleReady, setBleReady] = useState<boolean | null>(null);
+    const [scanning, setScanning]  = useState(false);
+    const [peerCount, setPeerCount] = useState(0);
+    const [activity, setActivity]  = useState<ActivityEntry[]>([]);
 
-    const addLog = (msg: string, type: LogEntry['type'] = 'info') => {
-        const entry: LogEntry = {
+    const peerPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    const addActivity = (icon: string, message: string, color: string) => {
+        const entry: ActivityEntry = {
             id: `${Date.now()}_${Math.random()}`,
-            time: new Date().toLocaleTimeString(),
-            type,
-            message: msg,
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            icon, message, color,
         };
-        setLogs(prev => [entry, ...prev].slice(0, 80));
+        setActivity(prev => [entry, ...prev].slice(0, 10));
     };
 
-    // ── Init BLE ──────────────────────────────────────────────────────
+    // ── Poll peer count every 3 s while mounted ───────────────────────
     useEffect(() => {
-        addLog('Initialising BLE adapter...', 'info');
+        peerPollRef.current = setInterval(() => {
+            setPeerCount(bleMeshService.getPeerCount());
+        }, 3000);
+        return () => {
+            if (peerPollRef.current) clearInterval(peerPollRef.current);
+        };
+    }, []);
+
+    // ── Init mesh ────────────────────────────────────────────────────
+    useEffect(() => {
         bleMeshService.init().then(ready => {
             setBleReady(ready);
             if (ready) {
-                addLog('BLE adapter ready ✅', 'success');
+                addActivity('✅', 'Mesh network is ready on your phone', C.green);
             } else {
-                addLog('BLE unavailable — enable Bluetooth and grant permissions', 'error');
+                addActivity('⚠️', 'Could not start mesh — check Bluetooth, Wi-Fi and Location', C.red);
             }
         });
-
         return () => {
             bleMeshService.stopScanning();
         };
     }, []);
 
-    // ── Start scanning ────────────────────────────────────────────────
-    const startScan = async () => {
+    // ── Turn mesh on ─────────────────────────────────────────────────
+    const startMesh = async () => {
         if (!bleReady) {
-            Alert.alert('BLE Not Ready', 'Enable Bluetooth and grant permissions first.');
+            Alert.alert(
+                'Cannot Start Mesh',
+                'Please make sure Bluetooth, Wi-Fi and Location are turned on, then try again.',
+            );
             return;
         }
         setScanning(true);
-        addLog('Scanning for nearby SafeConnect devices...', 'info');
+        addActivity('📡', 'Listening for nearby SafeConnect users…', C.blue);
 
         await bleMeshService.startScanning((pkt: MeshPacket) => {
-            addLog(`📦 Packet received! Type: ${pkt.type}  Hops: ${pkt.hops}  From: ${pkt.origin.slice(0, 8)}...`, 'packet');
-            setPackets(prev => {
-                if (prev.find(p => p.id === pkt.id)) return prev;
-                return [pkt, ...prev];
-            });
+            const { icon, message, color } = packetToActivity(pkt);
+            addActivity(icon, message, color);
+            setPeerCount(bleMeshService.getPeerCount());
         });
     };
 
-    const stopScan = () => {
+    // ── Turn mesh off ────────────────────────────────────────────────
+    const stopMesh = () => {
         bleMeshService.stopScanning();
         setScanning(false);
-        addLog('Scan stopped', 'info');
+        addActivity('🔇', 'Mesh turned off', C.muted);
     };
 
-    // ── Send a test SOS packet ────────────────────────────────────────
-    const sendTestPacket = async () => {
+    // ── Send test ping ───────────────────────────────────────────────
+    const sendTestPing = async () => {
         if (!bleReady) {
-            Alert.alert('BLE Not Ready');
+            Alert.alert('Mesh Not Ready', 'Turn on the mesh first, then try again.');
             return;
         }
-        addLog('Broadcasting TEST SOS packet via BLE...', 'info');
         const pkt = bleMeshService.createSOSPacket(userId, {
-            userId,
-            userName,
+            userId, userName,
             gps: { latitude: 19.076, longitude: 72.877, address: 'Test location' },
             activatedAt: Date.now(),
             isActive: true,
@@ -130,136 +145,134 @@ const MeshStatusScreen: React.FC<Props> = ({ navigation, route }) => {
             isTestPacket: true,
         });
         await bleMeshService.broadcast(pkt);
-        addLog('Test SOS packet broadcast complete ✅', 'success');
-        setPackets(prev => [pkt, ...prev]);
+        addActivity('🧪', 'Test ping sent — nearby phones should receive it', C.blue);
     };
 
-    // ── Helpers ────────────────────────────────────────────────────────
-    const logColor = (type: LogEntry['type']) => {
-        switch (type) {
-            case 'success': return C.green;
-            case 'error': return C.red;
-            case 'warning': return C.orange;
-            case 'packet': return C.blue;
-            default: return C.muted;
-        }
-    };
+    // ── Derived display values ────────────────────────────────────────
+    const statusColor =
+        bleReady === null ? C.orange :
+        bleReady && scanning ? C.green :
+        bleReady ? C.blue : C.red;
 
-    const statusColor = bleReady === null ? C.orange : bleReady ? C.green : C.red;
-    const statusLabel = bleReady === null ? '⏳ Initialising...' : bleReady ? '✅ BLE Ready' : '❌ BLE Unavailable';
+    const statusEmoji =
+        bleReady === null ? '⏳' :
+        bleReady && scanning ? '📡' :
+        bleReady ? '✅' : '❌';
+
+    const statusLabel =
+        bleReady === null ? 'Starting up…' :
+        bleReady && scanning ? 'Active — listening for people' :
+        bleReady ? 'Ready (not yet listening)' : 'Unavailable';
+
+    const statusDesc =
+        bleReady === null ? 'Please wait while we set up your mesh.' :
+        bleReady && scanning ? 'Your phone is sharing safety signals with nearby SafeConnect users.' :
+        bleReady ? 'Tap "Turn On Mesh" to start connecting with people nearby.' :
+        'Make sure Bluetooth, Wi-Fi and Location are enabled and try again.';
+
+    const peerLabel =
+        peerCount === 0 ? 'No one nearby yet' :
+        peerCount === 1 ? '1 person nearby on SafeConnect' :
+        `${peerCount} people nearby on SafeConnect`;
 
     return (
         <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
 
-            {/* Header */}
+            {/* ── Header ── */}
             <View style={s.header}>
                 <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
                     <BackIcon />
                 </TouchableOpacity>
                 <View style={{ flex: 1 }}>
-                    <Text style={s.headerTitle}>BLE Mesh Monitor</Text>
-                    <Text style={s.headerSub}>Real-time mesh network status</Text>
-                </View>
-                <View style={[s.statusBadge, { backgroundColor: statusColor + '22', borderColor: statusColor }]}>
-                    <Text style={[s.statusBadgeText, { color: statusColor }]}>{statusLabel}</Text>
+                    <Text style={s.headerTitle}>Mesh Network</Text>
+                    <Text style={s.headerSub}>Works without internet</Text>
                 </View>
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.scroll}>
 
-                {/* ── Stats Row ── */}
-                <Animated.View entering={FadeInDown.duration(400)} style={s.statsRow}>
+                {/* ── Hero status card ── */}
+                <Animated.View entering={FadeInDown.duration(400)} style={[s.heroCard, { borderColor: statusColor + '55' }]}>
+                    <Text style={s.heroEmoji}>{statusEmoji}</Text>
+                    <Text style={[s.heroStatus, { color: statusColor }]}>{statusLabel}</Text>
+                    <Text style={s.heroDesc}>{statusDesc}</Text>
+
+                    {/* Peer count pill */}
+                    <View style={[s.peerPill, { backgroundColor: statusColor + '18', borderColor: statusColor + '44' }]}>
+                        <Text style={[s.peerText, { color: statusColor }]}>👥  {peerLabel}</Text>
+                    </View>
+                </Animated.View>
+
+                {/* ── Main button ── */}
+                <Animated.View entering={FadeInUp.duration(400).delay(60)} style={s.btnRow}>
+                    {!scanning ? (
+                        <TouchableOpacity
+                            style={[s.mainBtn, { backgroundColor: bleReady ? C.green : C.muted }]}
+                            onPress={startMesh} activeOpacity={0.85}
+                            disabled={bleReady !== true}>
+                            <Text style={s.mainBtnText}>📡  Turn On Mesh</Text>
+                        </TouchableOpacity>
+                    ) : (
+                        <TouchableOpacity
+                            style={[s.mainBtn, { backgroundColor: C.red }]}
+                            onPress={stopMesh} activeOpacity={0.85}>
+                            <Text style={s.mainBtnText}>🔇  Turn Off Mesh</Text>
+                        </TouchableOpacity>
+                    )}
+                </Animated.View>
+
+                {/* ── What is mesh? ── */}
+                <Animated.View entering={FadeInUp.duration(400).delay(100)} style={s.explainerCard}>
+                    <Text style={s.explainerTitle}>How does this work?</Text>
                     {[
-                        { label: 'Packets\nReceived', value: `${packets.length}`, color: C.blue },
-                        { label: 'Active\nScan', value: scanning ? 'ON' : 'OFF', color: scanning ? C.green : C.muted },
-                        { label: 'Log\nEntries', value: `${logs.length}`, color: C.orange },
-                        { label: 'BLE\nStatus', value: bleReady ? 'ON' : bleReady === null ? '...' : 'OFF', color: statusColor },
-                    ].map(stat => (
-                        <View key={stat.label} style={s.statCard}>
-                            <Text style={[s.statValue, { color: stat.color }]}>{stat.value}</Text>
-                            <Text style={s.statLabel}>{stat.label}</Text>
+                        { icon: '📵', text: 'No internet needed — works when mobile networks are down' },
+                        { icon: '🔗', text: 'Your phone connects directly to other nearby SafeConnect phones' },
+                        { icon: '🆘', text: 'Emergency alerts travel from phone to phone to reach help farther away' },
+                        { icon: '🔒', text: 'Only SafeConnect users can join — your data stays safe' },
+                    ].map(item => (
+                        <View key={item.icon} style={s.explainerRow}>
+                            <Text style={s.explainerIcon}>{item.icon}</Text>
+                            <Text style={s.explainerText}>{item.text}</Text>
                         </View>
                     ))}
                 </Animated.View>
 
-                {/* ── Control Buttons ── */}
-                <Animated.View entering={FadeInUp.duration(400).delay(80)} style={s.controls}>
-                    {!scanning ? (
-                        <TouchableOpacity style={[s.ctrlBtn, { backgroundColor: C.green }]}
-                            onPress={startScan} activeOpacity={0.85} disabled={bleReady !== true}>
-                            <Text style={s.ctrlBtnText}>📡 Start Scanning</Text>
-                        </TouchableOpacity>
-                    ) : (
-                        <TouchableOpacity style={[s.ctrlBtn, { backgroundColor: C.red }]}
-                            onPress={stopScan} activeOpacity={0.85}>
-                            <Text style={s.ctrlBtnText}>⏹ Stop Scanning</Text>
-                        </TouchableOpacity>
-                    )}
-
-                    <TouchableOpacity style={[s.ctrlBtn, { backgroundColor: C.blue }]}
-                        onPress={sendTestPacket} activeOpacity={0.85} disabled={bleReady !== true}>
-                        <Text style={s.ctrlBtnText}>🧪 Send Test SOS</Text>
-                    </TouchableOpacity>
+                {/* ── Tips for better connection ── */}
+                <Animated.View entering={FadeInUp.duration(400).delay(140)} style={s.tipsCard}>
+                    <Text style={s.tipsTitle}>💡  Tips for the best connection</Text>
+                    <Text style={s.tipItem}>• Keep Bluetooth, Wi-Fi and Location ON</Text>
+                    <Text style={s.tipItem}>• Stay within ~60 m of another SafeConnect user</Text>
+                    <Text style={s.tipItem}>• The more people who turn on mesh, the farther signals travel</Text>
+                    <Text style={s.tipItem}>• Works even in Airplane Mode (as long as Bluetooth is on)</Text>
                 </Animated.View>
 
-                {/* ── How to Test ── */}
-                <Animated.View entering={FadeInUp.duration(400).delay(120)} style={s.testGuide}>
-                    <Text style={s.testGuideTitle}>📋 How to Test</Text>
-                    <Text style={s.testGuideText}>
-                        {'1️⃣  Install this dev build on 2 Android phones\n'}
-                        {'2️⃣  Both phones: Bluetooth ON\n'}
-                        {'3️⃣  Phone A: tap "Start Scanning"\n'}
-                        {'4️⃣  Phone B: tap "Send Test SOS"\n'}
-                        {'5️⃣  Phone A should show packet received ✅\n'}
-                        {'6️⃣  Airplane Mode ON → repeat → still works! 📵'}
-                    </Text>
-                </Animated.View>
-
-                {/* ── Received Packets ── */}
-                {packets.length > 0 && (
-                    <Animated.View entering={FadeInUp.duration(400)} style={s.section}>
-                        <Text style={s.sectionTitle}>📦 RECEIVED PACKETS ({packets.length})</Text>
-                        {packets.map((pkt, i) => (
-                            <View key={pkt.id} style={s.packetCard}>
-                                <View style={s.packetRow}>
-                                    <View style={[s.typeBadge, { backgroundColor: C.blue + '22' }]}>
-                                        <Text style={[s.typeBadgeText, { color: C.blue }]}>{pkt.type.toUpperCase()}</Text>
-                                    </View>
-                                    <Text style={s.packetHops}>Hops: {pkt.hops}</Text>
-                                    <Text style={s.packetTime}>
-                                        {new Date(pkt.createdAt).toLocaleTimeString()}
-                                    </Text>
-                                </View>
-                                <Text style={s.packetOrigin}>From: {pkt.origin.slice(0, 16)}...</Text>
-                                <Text style={s.packetId}>ID: {pkt.id}</Text>
+                {/* ── Recent activity ── */}
+                <Animated.View entering={FadeInUp.duration(400).delay(180)} style={s.activitySection}>
+                    <Text style={s.sectionTitle}>Recent activity</Text>
+                    {activity.length === 0 ? (
+                        <View style={s.emptyActivity}>
+                            <Text style={s.emptyText}>No activity yet.{'\n'}Turn on mesh to start connecting.</Text>
+                        </View>
+                    ) : activity.map(item => (
+                        <View key={item.id} style={s.activityRow}>
+                            <Text style={s.activityIcon}>{item.icon}</Text>
+                            <View style={{ flex: 1 }}>
+                                <Text style={[s.activityMsg, { color: item.color }]}>{item.message}</Text>
+                                <Text style={s.activityTime}>{item.time}</Text>
                             </View>
-                        ))}
+                        </View>
+                    ))}
+                </Animated.View>
+
+                {/* ── Test ping button ── */}
+                {bleReady === true && (
+                    <Animated.View entering={FadeInUp.duration(400).delay(220)}>
+                        <TouchableOpacity style={s.testBtn} onPress={sendTestPing} activeOpacity={0.8}>
+                            <Text style={s.testBtnText}>🧪  Send a Test Ping</Text>
+                            <Text style={s.testBtnSub}>Checks if nearby phones can receive your signal</Text>
+                        </TouchableOpacity>
                     </Animated.View>
                 )}
-
-                {/* ── Live Log ── */}
-                <Animated.View entering={FadeInUp.duration(400).delay(160)} style={s.section}>
-                    <Text style={s.sectionTitle}>🖥 LIVE LOG</Text>
-                    <View style={s.logBox}>
-                        {logs.length === 0 ? (
-                            <Text style={s.logEmpty}>No log entries yet. Start scanning to see activity.</Text>
-                        ) : logs.map(entry => (
-                            <View key={entry.id} style={s.logEntry}>
-                                <Text style={s.logTime}>{entry.time}</Text>
-                                <Text style={[s.logMsg, { color: logColor(entry.type) }]}>{entry.message}</Text>
-                            </View>
-                        ))}
-                    </View>
-                </Animated.View>
-
-                {/* ── Info ── */}
-                <View style={s.infoBox}>
-                    <Text style={s.infoText}>
-                        {'⚡ This screen requires the Expo Development Build (not Expo Go).\n'}
-                        {'📵 BLE communication works completely offline — no WiFi or cellular needed.\n'}
-                        {'🔗 Service UUID: 4fafc201-1fb5-459e-8fcc-c5c9c331914b'}
-                    </Text>
-                </View>
 
             </ScrollView>
         </SafeAreaView>
@@ -268,7 +281,7 @@ const MeshStatusScreen: React.FC<Props> = ({ navigation, route }) => {
 
 const s = StyleSheet.create({
     safe: { flex: 1, backgroundColor: C.bg },
-    scroll: { padding: 16, paddingBottom: 40 },
+    scroll: { padding: 16, paddingBottom: 48 },
 
     header: {
         flexDirection: 'row', alignItems: 'center', gap: 12,
@@ -282,61 +295,76 @@ const s = StyleSheet.create({
     },
     headerTitle: { fontSize: 17, fontWeight: '800', color: C.brown },
     headerSub: { fontSize: 11, color: C.muted, fontWeight: '500', marginTop: 1 },
-    statusBadge: {
-        borderWidth: 1.5, borderRadius: 10,
-        paddingHorizontal: 10, paddingVertical: 4,
+
+    /* Hero card */
+    heroCard: {
+        backgroundColor: C.card, borderWidth: 1.5,
+        borderRadius: 20, padding: 24,
+        alignItems: 'center', marginBottom: 14,
     },
-    statusBadgeText: { fontSize: 11, fontWeight: '700' },
-
-    statsRow: { flexDirection: 'row', gap: 10, marginBottom: 14 },
-    statCard: {
-        flex: 1, backgroundColor: C.card, borderWidth: 1, borderColor: C.border,
-        borderRadius: 14, padding: 12, alignItems: 'center',
+    heroEmoji: { fontSize: 56, marginBottom: 10 },
+    heroStatus: { fontSize: 20, fontWeight: '800', marginBottom: 6, textAlign: 'center' },
+    heroDesc: { fontSize: 14, color: C.muted, textAlign: 'center', lineHeight: 21, marginBottom: 16 },
+    peerPill: {
+        borderWidth: 1.5, borderRadius: 30,
+        paddingHorizontal: 18, paddingVertical: 8,
     },
-    statValue: { fontSize: 22, fontWeight: '900' },
-    statLabel: { fontSize: 10, color: C.muted, fontWeight: '600', textAlign: 'center', marginTop: 2 },
+    peerText: { fontSize: 14, fontWeight: '700' },
 
-    controls: { flexDirection: 'row', gap: 10, marginBottom: 14 },
-    ctrlBtn: { flex: 1, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
-    ctrlBtnText: { fontSize: 14, fontWeight: '800', color: C.white },
+    /* Main button */
+    btnRow: { marginBottom: 14 },
+    mainBtn: {
+        borderRadius: 16, paddingVertical: 16,
+        alignItems: 'center', justifyContent: 'center',
+        elevation: 2,
+    },
+    mainBtnText: { fontSize: 16, fontWeight: '800', color: C.white },
 
-    testGuide: {
+    /* Explainer */
+    explainerCard: {
+        backgroundColor: C.blueLight, borderWidth: 1.5,
+        borderColor: C.blue + '33', borderRadius: 16,
+        padding: 16, marginBottom: 14,
+    },
+    explainerTitle: { fontSize: 15, fontWeight: '800', color: C.blue, marginBottom: 12 },
+    explainerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 10 },
+    explainerIcon: { fontSize: 20, lineHeight: 24 },
+    explainerText: { fontSize: 13, color: C.brown, lineHeight: 20, flex: 1 },
+
+    /* Tips */
+    tipsCard: {
         backgroundColor: C.greenLight, borderWidth: 1.5,
-        borderColor: 'rgba(42,122,90,0.3)', borderRadius: 14,
-        padding: 14, marginBottom: 14,
+        borderColor: C.green + '33', borderRadius: 16,
+        padding: 16, marginBottom: 14,
     },
-    testGuideTitle: { fontSize: 14, fontWeight: '800', color: C.green, marginBottom: 8 },
-    testGuideText: { fontSize: 13, color: '#1B4332', lineHeight: 22 },
+    tipsTitle: { fontSize: 14, fontWeight: '800', color: C.green, marginBottom: 10 },
+    tipItem: { fontSize: 13, color: '#1B4332', lineHeight: 22 },
 
-    section: { marginBottom: 14 },
-    sectionTitle: { fontSize: 11, fontWeight: '700', color: C.muted, letterSpacing: 1, marginBottom: 8 },
-
-    packetCard: {
+    /* Activity */
+    activitySection: { marginBottom: 14 },
+    sectionTitle: { fontSize: 13, fontWeight: '700', color: C.brown, marginBottom: 10 },
+    emptyActivity: {
+        backgroundColor: C.card, borderRadius: 14, borderWidth: 1,
+        borderColor: C.border, padding: 20, alignItems: 'center',
+    },
+    emptyText: { fontSize: 13, color: C.muted, textAlign: 'center', lineHeight: 21 },
+    activityRow: {
+        flexDirection: 'row', alignItems: 'flex-start', gap: 12,
         backgroundColor: C.card, borderWidth: 1, borderColor: C.border,
-        borderRadius: 12, padding: 12, marginBottom: 8,
+        borderRadius: 14, padding: 14, marginBottom: 8,
     },
-    packetRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
-    typeBadge: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2 },
-    typeBadgeText: { fontSize: 11, fontWeight: '700' },
-    packetHops: { fontSize: 12, color: C.muted, fontWeight: '600' },
-    packetTime: { marginLeft: 'auto', fontSize: 11, color: C.muted },
-    packetOrigin: { fontSize: 12, color: C.brown, fontWeight: '600', marginBottom: 2 },
-    packetId: { fontSize: 10, color: C.muted, fontFamily: 'monospace' },
+    activityIcon: { fontSize: 22 },
+    activityMsg: { fontSize: 13, fontWeight: '600', lineHeight: 19 },
+    activityTime: { fontSize: 11, color: C.muted, marginTop: 2 },
 
-    logBox: {
-        backgroundColor: '#0F1117', borderRadius: 14,
-        padding: 12, maxHeight: 300,
+    /* Test button */
+    testBtn: {
+        borderWidth: 1.5, borderColor: C.blue + '55',
+        borderRadius: 14, padding: 14, alignItems: 'center',
+        backgroundColor: C.blueLight,
     },
-    logEmpty: { fontSize: 12, color: '#666', fontStyle: 'italic' },
-    logEntry: { flexDirection: 'row', gap: 8, marginBottom: 4 },
-    logTime: { fontSize: 10, color: '#555', fontFamily: 'monospace', minWidth: 60 },
-    logMsg: { fontSize: 11, flex: 1, fontFamily: 'monospace' },
-
-    infoBox: {
-        backgroundColor: 'rgba(44,26,14,0.05)',
-        borderRadius: 12, padding: 12, marginBottom: 8,
-    },
-    infoText: { fontSize: 11, color: C.muted, lineHeight: 18 },
+    testBtnText: { fontSize: 14, fontWeight: '700', color: C.blue },
+    testBtnSub: { fontSize: 11, color: C.muted, marginTop: 3 },
 });
 
 export default MeshStatusScreen;

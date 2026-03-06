@@ -69,14 +69,10 @@
         }
       ],
       [
-        "react-native-ble-plx",
+        "expo-nearby-connections",
         {
-          "isBackgroundEnabled": true,
-          "modes": [
-            "peripheral",
-            "central"
-          ],
-          "bluetoothAlwaysPermission": "Allow SafeConnect to use Bluetooth for offline mesh communication between nearby devices during disasters"
+          "bonjourServicesName": "safeconnect-mesh",
+          "localNetworkUsagePermissionText": "SafeConnect uses local network to discover nearby devices during emergencies"
         }
       ]
     ],

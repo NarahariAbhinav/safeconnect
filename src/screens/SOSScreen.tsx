@@ -267,10 +267,10 @@ const SOSScreen: React.FC<Props> = ({ navigation, route }) => {
         // Start location trail recording (battery-aware)
         locationTrailService.start();
 
-        // Init BLE mesh (works silently — no crash if unavailable in Expo Go)
+        // Init mesh networking (works silently — no crash if unavailable in Expo Go)
         bleMeshService.init().then(ready => {
             if (ready) {
-                console.log('[SOSScreen] BLE mesh ready ✅');
+                console.log('[SOSScreen] Mesh ready ✅');
                 bleMeshService.startScanning((pkt) => {
                     console.log('[SOSScreen] Mesh packet received:', pkt.type, 'hops:', pkt.hops);
                     // Count unique peers from heartbeat packets
@@ -422,13 +422,19 @@ const SOSScreen: React.FC<Props> = ({ navigation, route }) => {
             console.log('[Trail] Location trail uploaded ✅');
         } catch { console.log('[Trail] Upload skipped'); }
 
-        // 5. BLE Mesh Broadcast — relay SOS to nearby SafeConnect devices
+        // 5. Mesh Broadcast — relay SOS to nearby SafeConnect devices
+        //    Include phone numbers + message so gateway can forward SMS
+        //    to contacts who DON'T have SafeConnect (e.g. User B with just signal)
         try {
             const bleReady = bleMeshService.ready;
             if (bleReady) {
-                const blePkt = bleMeshService.createSOSPacket(userId, record);
+                const blePkt = bleMeshService.createSOSPacket(userId, {
+                    ...record,
+                    emergencyPhones: phones,       // contacts' phone numbers
+                    emergencyMessage: message,     // pre-built SMS text
+                });
                 await bleMeshService.broadcast(blePkt);
-                console.log('[BLE] SOS broadcast sent ✅');
+                console.log('[Mesh] SOS broadcast sent ✅ (with', phones.length, 'phone numbers for relay)');
 
                 // If battery critical, send a special alert
                 if (batteryService.mode === 'critical') {
@@ -438,13 +444,13 @@ const SOSScreen: React.FC<Props> = ({ navigation, route }) => {
                         batteryLevel: Math.round(batteryService.level * 100),
                     });
                     await bleMeshService.broadcast(critPkt);
-                    console.log('[BLE] Battery critical alert sent ⚠️');
+                    console.log('[Mesh] Battery critical alert sent ⚠️');
                 }
             } else {
-                console.log('[BLE] Not available (Expo Go) — using DTN queue only');
+                console.log('[Mesh] Not available yet — SOS queued for mesh delivery');
             }
         } catch (bleErr) {
-            console.log('[BLE] Broadcast skipped:', bleErr);
+            console.log('[Mesh] Broadcast skipped:', bleErr);
         }
 
         setNotifying(false);
@@ -573,7 +579,7 @@ const SOSScreen: React.FC<Props> = ({ navigation, route }) => {
                             You can still activate SOS. Here's what will happen:{`\n`}
                             {'✅'} Alert saved on this device{`\n`}
                             {'⏳'} SMS queued — sends the moment signal returns{`\n`}
-                            {'📡'} BLE mesh will relay to nearby devices (Phase 2)
+                            {'📡'} Mesh will relay to nearby SafeConnect devices
                         </Text>
                     </Animated.View>
                 )}
@@ -586,7 +592,7 @@ const SOSScreen: React.FC<Props> = ({ navigation, route }) => {
                             {'✅'} SOS saved locally on device{`\n`}
                             {'⏳'} SMS will auto-send when signal returns{`\n`}
                             {'☁️'} Will sync to coordination centre via gateway{`\n`}
-                            {'📡'} BLE mesh broadcast active (Phase 2)
+                            {'📡'} Mesh broadcast active — relaying to nearby devices
                         </Text>
                     </Animated.View>
                 )}

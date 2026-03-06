@@ -1,436 +1,453 @@
 /**
- * BLEMeshService.ts — Core BLE Mesh for SafeConnect
+ * BLEMeshService.ts — Core Mesh Networking for SafeConnect
  *
- * Architecture: Each phone plays BOTH roles simultaneously:
+ * Uses expo-nearby-connections (Google Nearby Connections on Android,
+ * Apple Multipeer Connectivity on iOS).
  *
- *  ┌──────────────────────────────────────┐
- *  │  PERIPHERAL (Advertise / Server)     │  ← "I have messages"
- *  │  GATT Server broadcasts SOS packets  │
- *  └──────────────────────────────────────┘
- *            ↕ BLE ~100m
- *  ┌──────────────────────────────────────┐
- *  │  CENTRAL (Scan / Client)             │  ← "I'm listening"
- *  │  Discovers nearby SafeConnect nodes  │
- *  │  Reads their payloads                │
- *  │  Stores + re-broadcasts forward      │
- *  └──────────────────────────────────────┘
+ * WHY: react-native-ble-plx is Central-only on Android — devices could scan
+ * but were INVISIBLE to each other. Google Nearby Connections handles both
+ * advertising AND discovery simultaneously using BLE + WiFi Direct with NO
+ * internet required.
  *
- * Message Flow (Offline DTN):
- *   SOS activated → BLE broadcast → relay hops → Gateway node → Firebase
+ * Every device runs advertise + discover at the same time → true mesh.
+ * Messages hop device-to-device until they reach a gateway with internet.
  */
-
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { BleManager, Characteristic, Device, State } from 'react-native-ble-plx';
+import * as Nearby from 'expo-nearby-connections';
+import { Alert, Linking } from 'react-native';
 import { chatService } from '../chatService';
+import { notificationService } from '../notificationService';
 import { GovtAction, sosService } from '../sos';
 
-// ─── SafeConnect BLE Identity (fixed UUIDs so all devices recognise each other)
-export const SC_SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
-export const SC_CHAR_UUID = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
+const KEY_SMS_RELAYED = 'ble_sms_relayed'; // track which SOS we already relayed SMS for
 
-// ─── Packet structure (JSON serialised, max 512 bytes per BLE write)
+// Kept for backward compat (some screens import these UUIDs for display)
+export const SC_SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
+export const SC_CHAR_UUID    = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
+
+// ─── Packet ───────────────────────────────────────────────────────
 export interface MeshPacket {
-    id: string;          // unique packet ID (used for deduplication)
-    type: 'sos' | 'needs' | 'resource' | 'ping' | 'govtAction' | 'chat';
-    payload: string;          // JSON stringified SOSRecord / NeedsReport / GovtAction / ChatMsg
-    origin: string;          // userId who originally sent this
-    hops: number;          // incremented each relay hop (max 5)
-    ttl: number;          // unix ms timestamp — drop packet after this
-    createdAt: number;
+  id: string;
+  type: 'sos' | 'needs' | 'resource' | 'ping' | 'govtAction' | 'chat';
+  payload: string;   // JSON-stringified data
+  origin: string;    // userId who sent this originally
+  hops: number;      // incremented at each relay hop
+  ttl: number;       // unix-ms expiry timestamp
+  createdAt: number;
 }
 
-const MAX_HOPS = 5;
-const TTL_MS = 12 * 60 * 60 * 1000;  // 12 hours
-const SCAN_TIMEOUT = 30_000;                 // 30s scan window
-const KEY_SEEN = 'ble_seen_packets';    // dedup store
-const KEY_QUEUE = 'ble_relay_queue';     // packets waiting to re-broadcast
+const MAX_HOPS    = 5;
+const TTL_MS      = 12 * 60 * 60 * 1000;  // 12 hours
+const KEY_SEEN    = 'ble_seen_packets';    // dedup store
+const KEY_QUEUE   = 'ble_relay_queue';     // pending relay queue
+const STRATEGY    = Nearby.Strategy.P2P_CLUSTER; // many-to-many mesh
 
+// ─── Service ──────────────────────────────────────────────────────
 class BLEMeshServiceClass {
-    private manager: BleManager | null = null;
-    private isScanning: boolean = false;
-    private listeners: ((pkt: MeshPacket) => void)[] = [];
-    private _ready: boolean = false;
-    public _peerCount: number = 0;  // Tracks nearby connected peers
-    private connectedDevices: Set<string> = new Set();  // Track connected device IDs
+  private _ready        = false;
+  private _initialized  = false;
+  private peers         = new Set<string>();  // currently connected peer IDs
+  private listeners: ((pkt: MeshPacket) => void)[] = [];
+  private unsubs: Array<() => void> = [];
+  private _name         = 'SafeConnect';
 
-    // ── Init ──────────────────────────────────────────────────────────────
-    async init(): Promise<boolean> {
-        try {
-            this.manager = new BleManager();
-            console.log('[BLE] Manager created, waiting for Bluetooth state...');
+  // ── Public getters ─────────────────────────────────────────────
+  get ready()      { return this._ready; }
+  get _peerCount() { return this.peers.size; }
+  getPeerCount()   { return this.peers.size; }
 
-            return new Promise<boolean>(resolve => {
-                const timeoutId = setTimeout(() => {
-                    console.warn('[BLE] Init timeout — Bluetooth may be disabled or permissions not granted');
-                    resolve(false);
-                }, 10000);
+  // ── init() — call once on app launch ───────────────────────────
+  async init(displayName?: string): Promise<boolean> {
+    if (this._initialized && this._ready) return true;
 
-                const sub = this.manager!.onStateChange(state => {
-                    console.log('[BLE] Bluetooth state changed:', state);
-                    if (state === State.PoweredOn) {
-                        clearTimeout(timeoutId);
-                        sub.remove();
-                        this._ready = true;
-                        console.log('[BLE] ✅ Ready - Bluetooth is ON');
-                        resolve(true);
-                    } else if (state === State.PoweredOff) {
-                        clearTimeout(timeoutId);
-                        sub.remove();
-                        console.warn('[BLE] ❌ Bluetooth is OFF — user needs to enable it');
-                        resolve(false);
-                    } else if (state === State.Unauthorized) {
-                        clearTimeout(timeoutId);
-                        sub.remove();
-                        console.warn('[BLE] ❌ Bluetooth permissions not granted');
-                        resolve(false);
-                    } else if (state === State.Unknown) {
-                        console.warn('[BLE] ⏳ Bluetooth state unknown — waiting...');
-                    }
-                }, true);
-            });
-        } catch (e) {
-            console.error('[BLE] Fatal error during init:', e);
-            return false;
-        }
+    if (displayName) this._name = displayName;
+
+    // Register all event callbacks before starting advertising/discovery
+    this._registerEvents();
+
+    let advertiseOk = false;
+    let discoverOk  = false;
+
+    // Start advertising — makes this device visible to peers
+    try {
+      await Nearby.startAdvertise(this._name, STRATEGY);
+      advertiseOk = true;
+      console.log('[Nearby] Advertising started ✅');
+    } catch (e: any) {
+      console.warn('[Nearby] Advertising failed (may need permissions):', e?.message);
     }
 
-    get ready() { return this._ready; }
-    getPeerCount(): number { return this._peerCount; }
-
-    // ── Broadcast a packet (Peripheral/Advertising via GATT characteristic)
-    // Note: react-native-ble-plx is Central-only on Android.
-    // We simulate "advertising" by writing to connected devices we discover.
-    //
-    // TRUE advertising requires a separate peripheral library.
-    // For the MVP demo: we use scan → connect → write pattern (Central → Central relay)
-    async broadcast(pkt: MeshPacket): Promise<void> {
-        if (!this._ready) return;
-        await this._enqueueRelay(pkt);
-        await this._scanAndRelay();
+    // Start discovery — finds other SafeConnect devices
+    try {
+      await Nearby.startDiscovery(this._name, STRATEGY);
+      discoverOk = true;
+      console.log('[Nearby] Discovery started ✅');
+    } catch (e: any) {
+      console.warn('[Nearby] Discovery failed:', e?.message);
     }
 
-    // ── Start continuous scanning (call once on app launch when SOS is active)
-    async startScanning(onPacket?: (pkt: MeshPacket) => void): Promise<void> {
-        if (!this._ready || this.isScanning) return;
-        if (onPacket) this.listeners.push(onPacket);
-        this.isScanning = true;
-        console.log('[BLE] Scanning started...');
-        this._scan();
+    this._ready       = advertiseOk || discoverOk;
+    this._initialized = true;
+
+    if (this._ready) {
+      console.log('[Nearby] ✅ Mesh ready. Advertise:', advertiseOk, '| Discover:', discoverOk);
+    } else {
+      console.error('[Nearby] ❌ Mesh failed — check Bluetooth/WiFi permissions');
     }
 
-    stopScanning(): void {
-        this.manager?.stopDeviceScan();
-        this.isScanning = false;
-        console.log('[BLE] Scanning stopped');
-    }
+    return this._ready;
+  }
 
-    // ── Public listener management ─────────────────────────────────────────
-    addListener(cb: (pkt: MeshPacket) => void): void {
-        if (!this.listeners.includes(cb)) this.listeners.push(cb);
-    }
+  // ── Register Nearby event handlers ────────────────────────────
+  private _registerEvents(): void {
+    // Remove previous listeners (safe to call init() multiple times)
+    this.unsubs.forEach(fn => { try { fn(); } catch {} });
+    this.unsubs = [];
 
-    removeListener(cb: (pkt: MeshPacket) => void): void {
-        this.listeners = this.listeners.filter(l => l !== cb);
-    }
-
-
-    // ── Internal: scan for SafeConnect GATT service, connect, read packet ──
-    private _scan(): void {
-        this.manager!.startDeviceScan(
-            [SC_SERVICE_UUID],   // only match SafeConnect devices
-            { allowDuplicates: false },
-            async (error, device) => {
-                if (error) {
-                    console.warn('[BLE] Scan error:', error.message);
-                    // Restart scan on transient errors
-                    setTimeout(() => this._scan(), 5000);
-                    return;
-                }
-                if (!device) return;
-                console.log('[BLE] Found device:', device.id, device.name ?? 'unnamed');
-                await this._connectAndRead(device);
-            }
+    // Peer discovered (we are discovering, peer is advertising)
+    this.unsubs.push(
+      Nearby.onPeerFound(({ peerId, name }: any) => {
+        console.log('[Nearby] Peer found:', peerId, name);
+        // Automatically request connection — no manual pairing needed
+        Nearby.requestConnection(peerId).catch((e: any) =>
+          console.warn('[Nearby] requestConnection failed:', e?.message)
         );
+      })
+    );
 
-        // Auto-restart scan after SCAN_TIMEOUT
-        setTimeout(() => {
-            if (this.isScanning) {
-                this.manager?.stopDeviceScan();
-                console.log('[BLE] Restarting scan window...');
-                this._scan();
-            }
-        }, SCAN_TIMEOUT);
-    }
+    // Peer went out of range
+    this.unsubs.push(
+      Nearby.onPeerLost(({ peerId }: any) => {
+        this.peers.delete(peerId);
+        console.log('[Nearby] Peer lost:', peerId, '| Peers now:', this.peers.size);
+      })
+    );
 
-    private async _connectAndRead(device: Device): Promise<void> {
+    // Incoming connection request (we are advertising, peer is discovering)
+    this.unsubs.push(
+      Nearby.onInvitationReceived(({ peerId, name }: any) => {
+        console.log('[Nearby] Incoming invitation from:', peerId, name);
+        // Always accept — SafeConnect is a trusted community app
+        Nearby.acceptConnection(peerId).catch((e: any) =>
+          console.warn('[Nearby] acceptConnection failed:', e?.message)
+        );
+      })
+    );
+
+    // Connection fully established (both sides accepted)
+    this.unsubs.push(
+      Nearby.onConnected(async ({ peerId, name }: any) => {
+        this.peers.add(peerId);
+        console.log('[Nearby] ✅ Connected to', peerId, name, '| Peers:', this.peers.size);
+        // Immediately push any queued packets to the new peer
+        await this._flushQueueTo(peerId);
+      })
+    );
+
+    // Peer disconnected
+    this.unsubs.push(
+      Nearby.onDisconnected(({ peerId }: any) => {
+        this.peers.delete(peerId);
+        console.log('[Nearby] Disconnected from', peerId, '| Peers:', this.peers.size);
+      })
+    );
+
+    // Received a text payload from a peer (our packets are JSON strings)
+    this.unsubs.push(
+      Nearby.onTextReceived(async ({ peerId, text }: any) => {
         try {
-            const connected = await device.connect({ timeout: 8000 });
-            
-            // Track this device as connected
-            this.connectedDevices.add(device.id);
-            this._peerCount = this.connectedDevices.size;
-            console.log(`[BLE] Connected to peer ${device.id}. Total peers: ${this._peerCount}`);
-
-            await connected.discoverAllServicesAndCharacteristics();
-
-            const chars: Characteristic[] = await connected.characteristicsForService(SC_SERVICE_UUID);
-            const char = chars.find(c => c.uuid.toLowerCase() === SC_CHAR_UUID.toLowerCase());
-            if (!char) {
-                await connected.cancelConnection();
-                // Remove from tracking
-                this.connectedDevices.delete(device.id);
-                this._peerCount = this.connectedDevices.size;
-                return;
-            }
-
-            // Read the characteristic value (Base64 encoded JSON)
-            const read = await char.read();
-            if (!read.value) { 
-                await connected.cancelConnection();
-                this.connectedDevices.delete(device.id);
-                this._peerCount = this.connectedDevices.size;
-                return;
-            }
-
-            const raw = Buffer.from(read.value, 'base64').toString('utf8');
-            const pkt: MeshPacket = JSON.parse(raw);
-
-            // Also write any queued relay packets back to this node
-            // (bidirectional exchange)
-            const queue = await this._getRelayQueue();
-            for (const relayPkt of queue.slice(0, 3)) {   // max 3 packets per connection
-                const encoded = Buffer.from(JSON.stringify(relayPkt)).toString('base64');
-                await char.writeWithoutResponse(encoded);
-            }
-
-            await connected.cancelConnection();
-            
-            // Remove from tracking after disconnect
-            this.connectedDevices.delete(device.id);
-            this._peerCount = this.connectedDevices.size;
-            
-            await this._handleIncoming(pkt);
-        } catch (e: any) {
-            // Connection errors are common in BLE — just log and move on
-            console.log('[BLE] Connection error for', device.id, ':', e?.message ?? e);
-            // Clean up tracking on error
-            this.connectedDevices.delete(device.id);
-            this._peerCount = this.connectedDevices.size;
-        }
-    }
-
-    // ── Process an incoming packet ─────────────────────────────────────────
-    private async _handleIncoming(pkt: MeshPacket): Promise<void> {
-        // 1. Deduplication — have we seen this packet before?
-        if (await this._isSeen(pkt.id)) {
-            console.log('[BLE] Duplicate packet ignored:', pkt.id);
-            return;
-        }
-        // 2. TTL check — has it expired?
-        if (Date.now() > pkt.ttl) {
-            console.log('[BLE] Expired packet dropped:', pkt.id);
-            return;
-        }
-        // 3. Max hops check
-        if (pkt.hops >= MAX_HOPS) {
-            console.log('[BLE] Max hops reached:', pkt.id);
-            return;
-        }
-
-        console.log('[BLE] New packet received:', pkt.type, 'from', pkt.origin);
-        await this._markSeen(pkt.id);
-
-        // 4. Handle specific packet types locally
-        await this._processPacketLocally(pkt);
-
-        // 5. Notify listeners (SOSScreen, HomeScreen etc.)
-        this.listeners.forEach(cb => cb(pkt));
-
-        // 6. Try to sync to Firebase immediately (Gateway pattern)
-        const synced = await this._tryGatewaySync(pkt);
-        console.log('[BLE] Gateway sync:', synced ? 'uploaded ✅' : 'queued for relay');
-
-        // 7. If not synced, relay to more devices
-        if (!synced) {
-            const relay: MeshPacket = { ...pkt, hops: pkt.hops + 1 };
-            await this._enqueueRelay(relay);
-        }
-    }
-
-    // ── Process packet locally (store govtAction / chat on THIS device) ────
-    private async _processPacketLocally(pkt: MeshPacket): Promise<void> {
-        try {
-            const data = JSON.parse(pkt.payload);
-
-            if (pkt.type === 'govtAction') {
-                // Govt dispatched rescue — cache it locally so SOSScreen shows banner
-                const action = data as GovtAction;
-                await sosService.storeGovtActionFromMesh(action);
-                console.log('[BLE] GovtAction stored locally for SOS:', action.sosId);
-            }
-
-            if (pkt.type === 'chat') {
-                // Incoming chat message via BLE mesh — store locally
-                const { roomId, message } = data;
-                if (roomId && message) {
-                    const KEY = `chat_messages_${roomId}`;
-                    const raw = await AsyncStorage.getItem(KEY);
-                    const msgs = raw ? JSON.parse(raw) : [];
-                    if (!msgs.find((m: any) => m.id === message.id)) {
-                        msgs.push({ ...message, status: 'delivered' });
-                        msgs.sort((a: any, b: any) => a.createdAt - b.createdAt);
-                        await AsyncStorage.setItem(KEY, JSON.stringify(msgs));
-                        console.log('[BLE] Chat message stored locally:', message.id);
-                    }
-                }
-            }
+          const pkt: MeshPacket = JSON.parse(text);
+          console.log('[Nearby] Received', pkt.type, 'packet from peer', peerId);
+          await this._handlePacket(pkt);
         } catch (e) {
-            // Payload parse error — not critical
-            console.log('[BLE] Could not process packet locally:', (e as any)?.message);
+          console.warn('[Nearby] Bad payload from', peerId, ':', e);
         }
+      })
+    );
+  }
+
+  // ── startScanning — public API, idempotent ─────────────────────
+  async startScanning(onPacket?: (pkt: MeshPacket) => void): Promise<void> {
+    if (onPacket) this.addListener(onPacket);
+    if (!this._ready) await this.init();
+  }
+
+  // stopScanning is intentionally a no-op — mesh must stay active for relay
+  stopScanning(): void {}
+
+  // ── Listener management ────────────────────────────────────────
+  addListener(cb: (pkt: MeshPacket) => void): void {
+    if (!this.listeners.includes(cb)) this.listeners.push(cb);
+  }
+
+  removeListener(cb: (pkt: MeshPacket) => void): void {
+    this.listeners = this.listeners.filter(l => l !== cb);
+  }
+
+  // ── broadcast() — queue + send to all peers ────────────────────
+  async broadcast(pkt: MeshPacket): Promise<void> {
+    if (!this._ready) return;
+    await this._enqueue(pkt);             // persist first (offline safe)
+    if (this.peers.size > 0) {
+      await this._sendToAll(pkt);
+    } else {
+      console.log('[Nearby] No peers in range — packet queued for delivery');
+    }
+  }
+
+  // ── Send one packet to all currently connected peers ───────────
+  private async _sendToAll(pkt: MeshPacket): Promise<void> {
+    const text = JSON.stringify(pkt);
+    const stale: string[] = [];
+    for (const peerId of this.peers) {
+      try {
+        await Nearby.sendText(peerId, text);
+        console.log('[Nearby] Sent', pkt.type, 'to', peerId);
+      } catch (e: any) {
+        console.warn('[Nearby] Send failed to', peerId, ':', e?.message);
+        stale.push(peerId);
+      }
+    }
+    stale.forEach(id => this.peers.delete(id));
+  }
+
+  // ── When a new peer connects, push all queued packets to them ──
+  private async _flushQueueTo(peerId: string): Promise<void> {
+    const queue = await this._getQueue();
+    if (!queue.length) return;
+    console.log('[Nearby] Flushing', queue.length, 'queued packet(s) to', peerId);
+    for (const pkt of queue.slice(0, 5)) {
+      try {
+        await Nearby.sendText(peerId, JSON.stringify(pkt));
+      } catch {
+        break; // peer disconnected mid-flush, stop
+      }
+    }
+  }
+
+  // ── Handle an incoming packet ──────────────────────────────────
+  private async _handlePacket(pkt: MeshPacket): Promise<void> {
+    // 1. Deduplication
+    if (await this._seen(pkt.id)) { console.log('[Nearby] Dup dropped:', pkt.id); return; }
+    // 2. TTL expiry
+    if (Date.now() > pkt.ttl) { console.log('[Nearby] Expired dropped:', pkt.id); return; }
+    // 3. Hop limit
+    if (pkt.hops >= MAX_HOPS) { console.log('[Nearby] Max hops dropped:', pkt.id); return; }
+
+    await this._markSeen(pkt.id);
+    await this._storeLocally(pkt);
+    this.listeners.forEach(cb => cb(pkt)); // notify UI
+
+    // 4. If internet available, upload to Firebase (gateway role)
+    const uploaded = await this._gatewaySync();
+    if (!uploaded) {
+      // No internet — relay to other peers (mesh hop)
+      const relay: MeshPacket = { ...pkt, hops: pkt.hops + 1 };
+      await this._enqueue(relay);
+      if (this.peers.size > 0) await this._sendToAll(relay);
+    }
+  }
+
+  // ── Store packet data locally depending on type ────────────────
+  private async _storeLocally(pkt: MeshPacket): Promise<void> {
+    try {
+      const data = JSON.parse(pkt.payload);
+
+      if (pkt.type === 'govtAction') {
+        await sosService.storeGovtActionFromMesh(data as GovtAction);
+        console.log('[Nearby] GovtAction stored locally');
+      }
+
+      if (pkt.type === 'chat') {
+        const { roomId, message } = data;
+        if (!roomId || !message) return;
+        const key = 'chat_messages_' + roomId;
+        const raw = await AsyncStorage.getItem(key);
+        const msgs: any[] = raw ? JSON.parse(raw) : [];
+        if (msgs.some(m => m.id === message.id)) return; // already have it
+        msgs.push({ ...message, status: 'delivered' });
+        msgs.sort((a, b) => a.createdAt - b.createdAt);
+        await AsyncStorage.setItem(key, JSON.stringify(msgs));
+        console.log('[Nearby] Chat message stored locally:', message.id);
+      }
+
+      // ── SMS Gateway Relay — forward SOS alerts to non-app contacts ──
+      // When we receive an SOS from another user via mesh and we have signal,
+      // offer to send their emergency SMS to their contacts (who may not have
+      // SafeConnect). This is how User B (no app, has signal) gets notified.
+      if (pkt.type === 'sos' && data.emergencyPhones?.length > 0) {
+        await this._relaySMSForRemoteSOS(pkt.id, data);
+      }
+
+      // ── Firebase Gateway Relay — push remote SOS to govt dashboard ──
+      // If this gateway device has internet, upload the remote user's SOS
+      // directly to Firebase so the govt dashboard sees it immediately,
+      // even though User A (the sender) has no internet themselves.
+      if (pkt.type === 'sos' && !data.isTestPacket) {
+        sosService.pushSOSToFirebase(data as Record<string, unknown>)
+          .then(ok => { if (ok) console.log('[Gateway] ✅ Remote SOS pushed to Firebase dashboard'); })
+          .catch(() => {});
+      }
+    } catch (e) {
+      console.warn('[Nearby] storeLocally error:', (e as any)?.message);
+    }
+  }
+
+  /**
+   * SMS Gateway Relay — the critical bridge for non-app contacts.
+   *
+   * Scenario: User A (no signal, in disaster) → mesh → this device (gateway, has signal)
+   *           → SMS → User B (no SafeConnect app, has signal)
+   *
+   * This device opens the SMS compose screen pre-filled with User A's
+   * emergency contacts and message. The gateway user just taps Send.
+   */
+  private async _relaySMSForRemoteSOS(packetId: string, data: any): Promise<void> {
+    // Check if we already relayed SMS for this SOS (dedup)
+    const raw = await AsyncStorage.getItem(KEY_SMS_RELAYED);
+    const relayed: string[] = raw ? JSON.parse(raw) : [];
+    if (relayed.includes(packetId)) return;
+
+    const phones: string[] = data.emergencyPhones;
+    const message: string = data.emergencyMessage || `🆘 EMERGENCY: ${data.userName || 'Someone'} needs help!`;
+    const senderName = data.userName || 'A nearby person';
+
+    // Check if this device has internet (i.e. gateway with signal)
+    let hasSignal = false;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 3000);
+      const r = await fetch('https://www.google.com/generate_204', {
+        method: 'HEAD', cache: 'no-cache', signal: ctrl.signal,
+      });
+      clearTimeout(t);
+      hasSignal = r.ok || r.status === 204;
+    } catch { hasSignal = false; }
+
+    if (!hasSignal) {
+      console.log('[Gateway] No signal — cannot relay SMS for', senderName);
+      return;
     }
 
-    // ── Gateway: if internet available, upload to Firebase ────────────────
-    private async _tryGatewaySync(pkt: MeshPacket): Promise<boolean> {
-        try {
-            const res = await fetch('https://www.google.com/generate_204', {
-                method: 'HEAD', cache: 'no-cache',
-            });
-            if (!res.ok && res.status !== 204) return false;
-        } catch {
-            return false;   // No internet
-        }
+    // Mark as relayed immediately to avoid duplicate prompts
+    relayed.push(packetId);
+    if (relayed.length > 50) relayed.splice(0, relayed.length - 50);
+    await AsyncStorage.setItem(KEY_SMS_RELAYED, JSON.stringify(relayed));
 
-        // We have internet — flush SOS + needs + resources via sosService
-        try {
-            const { flushed } = await sosService.flushSyncQueue();
-            console.log('[BLE→Gateway] Uploaded', flushed, 'SOS records to Firebase ✅');
-        } catch { /* SOS sync failed */ }
+    // Show push notification
+    await notificationService.notifyInfo(
+      '🆘 Forward SOS Alert',
+      `${senderName} is in danger nearby! Tap to forward their emergency SMS to ${phones.length} contact(s).`
+    );
 
-        // Also sync pending chat messages
-        try {
-            const chatSynced = await chatService.syncPendingMessages();
-            if (chatSynced > 0) console.log('[BLE→Gateway] Synced', chatSynced, 'chat messages ✅');
-        } catch { /* Chat sync failed */ }
+    // Show alert with action to forward SMS
+    const relayMessage = `[Forwarded via SafeConnect Mesh]\n${message}`;
 
-        return true;
+    Alert.alert(
+      '🆘 Nearby Person Needs Help!',
+      `${senderName} has no signal and sent an SOS via mesh.\n\n` +
+      `You have signal — tap "Forward SMS" to send their emergency alert to their ${phones.length} contact(s).\n\n` +
+      `This is how their family/friends will know they need help.`,
+      [
+        {
+          text: 'Forward SMS',
+          onPress: () => {
+            // Open SMS compose with all emergency contacts pre-filled
+            const phoneList = phones.join(',');
+            Linking.openURL(
+              `sms:${phoneList}?body=${encodeURIComponent(relayMessage)}`
+            ).catch(e => console.warn('[Gateway] SMS relay open failed:', e));
+            console.log('[Gateway] ✅ SMS relay opened for', senderName, '→', phones.length, 'contacts');
+          },
+        },
+        { text: 'Not Now', style: 'cancel' },
+      ]
+    );
+  }
+
+  // ── Upload pending SOS/chat to Firebase when internet is back ──
+  // Also re-enqueues the SOS data with emergency phones so Firebase has them
+  // (govt dashboard can see contact numbers and call them directly)
+  private async _gatewaySync(): Promise<boolean> {
+    try {
+      const r = await fetch('https://www.google.com/generate_204', {
+        method: 'HEAD', cache: 'no-cache',
+      });
+      if (!r.ok && r.status !== 204) return false;
+    } catch {
+      return false; // offline
     }
+    try { const { flushed } = await sosService.flushSyncQueue(); if (flushed > 0) console.log('[Nearby→Firebase] SOS synced:', flushed); } catch {}
+    try { const n = await chatService.syncPendingMessages(); if (n > 0) console.log('[Nearby→Firebase] Chat synced:', n); } catch {}
+    return true;
+  }
 
-    // ── Scan once and write all queued relay packets to nearby devices ─────
-    private async _scanAndRelay(): Promise<void> {
-        return new Promise(resolve => {
-            let found = 0;
-            this.manager!.startDeviceScan([SC_SERVICE_UUID], { allowDuplicates: false },
-                async (error, device) => {
-                    if (error || !device) return;
-                    found++;
-                    await this._writeRelayQueue(device);
-                    if (found >= 5) {
-                        this.manager?.stopDeviceScan();
-                        resolve();
-                    }
-                }
-            );
-            setTimeout(() => {
-                this.manager?.stopDeviceScan();
-                resolve();
-            }, 10_000);
-        });
-    }
+  // ── Seen-packet deduplication ──────────────────────────────────
+  private async _seen(id: string): Promise<boolean> {
+    const raw = await AsyncStorage.getItem(KEY_SEEN);
+    return (raw ? JSON.parse(raw) as string[] : []).includes(id);
+  }
 
-    private async _writeRelayQueue(device: Device): Promise<void> {
-        try {
-            const conn = await device.connect({ timeout: 6000 });
-            await conn.discoverAllServicesAndCharacteristics();
-            const chars = await conn.characteristicsForService(SC_SERVICE_UUID);
-            const char = chars.find(c => c.uuid.toLowerCase() === SC_CHAR_UUID.toLowerCase());
-            if (!char) { await conn.cancelConnection(); return; }
+  private async _markSeen(id: string): Promise<void> {
+    const raw  = await AsyncStorage.getItem(KEY_SEEN);
+    const seen: string[] = raw ? JSON.parse(raw) : [];
+    seen.push(id);
+    if (seen.length > 200) seen.splice(0, seen.length - 200);
+    await AsyncStorage.setItem(KEY_SEEN, JSON.stringify(seen));
+  }
 
-            const queue = await this._getRelayQueue();
-            for (const pkt of queue.slice(0, 5)) {
-                const encoded = Buffer.from(JSON.stringify(pkt)).toString('base64');
-                await char.writeWithoutResponse(encoded);
-            }
-            await conn.cancelConnection();
-        } catch { /* Connection failed — try next device */ }
-    }
+  // ── Relay queue persistence ────────────────────────────────────
+  private async _getQueue(): Promise<MeshPacket[]> {
+    const raw = await AsyncStorage.getItem(KEY_QUEUE);
+    return raw ? JSON.parse(raw) : [];
+  }
 
-    // ── Deduplication helpers ─────────────────────────────────────────────
-    private async _isSeen(id: string): Promise<boolean> {
-        const raw = await AsyncStorage.getItem(KEY_SEEN);
-        const seen: string[] = raw ? JSON.parse(raw) : [];
-        return seen.includes(id);
-    }
+  private async _enqueue(pkt: MeshPacket): Promise<void> {
+    const q = await this._getQueue();
+    if (q.some(p => p.id === pkt.id)) return; // already queued
+    q.push(pkt);
+    if (q.length > 50) q.splice(0, q.length - 50);
+    await AsyncStorage.setItem(KEY_QUEUE, JSON.stringify(q));
+  }
 
-    private async _markSeen(id: string): Promise<void> {
-        const raw = await AsyncStorage.getItem(KEY_SEEN);
-        const seen: string[] = raw ? JSON.parse(raw) : [];
-        seen.push(id);
-        // Keep only last 200 IDs
-        if (seen.length > 200) seen.splice(0, seen.length - 200);
-        await AsyncStorage.setItem(KEY_SEEN, JSON.stringify(seen));
-    }
+  // ── Packet factory methods (unchanged API) ─────────────────────
+  createSOSPacket(userId: string, payload: object): MeshPacket {
+    return {
+      id: Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+      type: 'sos', payload: JSON.stringify(payload),
+      origin: userId, hops: 0, ttl: Date.now() + TTL_MS, createdAt: Date.now(),
+    };
+  }
 
-    // ── Relay queue ───────────────────────────────────────────────────────
-    private async _getRelayQueue(): Promise<MeshPacket[]> {
-        const raw = await AsyncStorage.getItem(KEY_QUEUE);
-        return raw ? JSON.parse(raw) : [];
-    }
+  createGovtActionPacket(action: GovtAction): MeshPacket {
+    return {
+      id: 'ga_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+      type: 'govtAction', payload: JSON.stringify(action),
+      origin: 'govt_eoc', hops: 0, ttl: Date.now() + TTL_MS, createdAt: Date.now(),
+    };
+  }
 
-    private async _enqueueRelay(pkt: MeshPacket): Promise<void> {
-        const queue = await this._getRelayQueue();
-        if (!queue.find(p => p.id === pkt.id)) {
-            queue.push(pkt);
-            // Keep max 50 packets
-            if (queue.length > 50) queue.splice(0, queue.length - 50);
-            await AsyncStorage.setItem(KEY_QUEUE, JSON.stringify(queue));
-        }
-    }
+  createChatPacket(userId: string, roomId: string, message: object): MeshPacket {
+    return {
+      id: 'chat_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+      type: 'chat', payload: JSON.stringify({ roomId, message }),
+      origin: userId, hops: 0, ttl: Date.now() + TTL_MS, createdAt: Date.now(),
+    };
+  }
 
-    // ── Public helpers: create mesh packets ─────────────────────────────────
-    createSOSPacket(userId: string, payload: object): MeshPacket {
-        return {
-            id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-            type: 'sos',
-            payload: JSON.stringify(payload),
-            origin: userId,
-            hops: 0,
-            ttl: Date.now() + TTL_MS,
-            createdAt: Date.now(),
-        };
-    }
-
-    createGovtActionPacket(action: GovtAction): MeshPacket {
-        return {
-            id: `ga_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-            type: 'govtAction',
-            payload: JSON.stringify(action),
-            origin: 'govt_eoc',
-            hops: 0,
-            ttl: Date.now() + TTL_MS,
-            createdAt: Date.now(),
-        };
-    }
-
-    createChatPacket(userId: string, roomId: string, message: object): MeshPacket {
-        return {
-            id: `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-            type: 'chat',
-            payload: JSON.stringify({ roomId, message }),
-            origin: userId,
-            hops: 0,
-            ttl: Date.now() + TTL_MS,
-            createdAt: Date.now(),
-        };
-    }
-
-    destroy(): void {
-        this.stopScanning();
-        this.manager?.destroy();
-        this.manager = null;
-        this._ready = false;
-        this.listeners = [];
-    }
+  // ── Full shutdown ──────────────────────────────────────────────
+  destroy(): void {
+    this.unsubs.forEach(fn => { try { fn(); } catch {} });
+    this.unsubs = [];
+    this.listeners = [];
+    try { Nearby.stopAdvertise(); }  catch {}
+    try { Nearby.stopDiscovery(); }  catch {}
+    try { Nearby.disconnect(); }     catch {}
+    this._ready = false;
+    this._initialized = false;
+    this.peers.clear();
+    console.log('[Nearby] Service destroyed');
+  }
 }
 
 export const bleMeshService = new BLEMeshServiceClass();

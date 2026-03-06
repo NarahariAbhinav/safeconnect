@@ -133,17 +133,35 @@ async function flushSyncQueue(): Promise<{ flushed: number; failed: number }> {
         const queue: SyncQueueItem[] = JSON.parse(raw);
         if (queue.length === 0) return { flushed: 0, failed: 0 };
 
+        // Ensure we are actually online before attempting to flush to avoid long timeouts
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 3000);
+            const ping = await fetch('https://www.google.com/generate_204', {
+                method: 'HEAD', cache: 'no-cache', signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+            if (!ping.ok && ping.status !== 204) return { flushed: 0, failed: queue.length };
+        } catch {
+            return { flushed: 0, failed: queue.length };
+        }
+
         let flushed = 0;
         const remaining: SyncQueueItem[] = [];
 
         for (const item of queue) {
             try {
                 const endpoint = `${FIREBASE_URL}/${item.type}s/${item.data.id}.json`;
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 6000);
                 const res = await fetch(endpoint, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ ...item.data, synced: true }),
+                    signal: controller.signal
                 });
+                clearTimeout(timeoutId);
+
                 if (res.ok) {
                     flushed++;
                 } else {
@@ -205,7 +223,7 @@ async function activateSOS(
         if (phoneNumbers.length > 0) {
             const locationUrl = `https://maps.google.com/?q=${gps.latitude},${gps.longitude}`;
             const smsMessage = `🆘 EMERGENCY: ${userName} needs help!\n📍 Location: ${gps.address || locationUrl}\nRespond to SafeConnect app or click: ${locationUrl}`;
-            
+
             // Send SMS in background (non-blocking)
             notificationService.sendSMSAlert(phoneNumbers, smsMessage)
                 .then(success => {
@@ -392,7 +410,11 @@ async function getResourceOffers(): Promise<ResourceOffer[]> {
 async function getReliefCamps(userGps?: GpsPoint): Promise<ReliefCamp[]> {
     // Try fetching fresh from Firebase
     try {
-        const res = await fetch(`${FIREBASE_URL}/relief_camps.json`);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        const res = await fetch(`${FIREBASE_URL}/relief_camps.json`, { signal: controller.signal });
+        clearTimeout(timeoutId);
+
         if (res.ok) {
             const data = await res.json();
             if (data) {
@@ -450,6 +472,28 @@ function getDefaultCamps(): ReliefCamp[] {
     ];
 }
 
+// ─── Gateway Firebase Push ────────────────────────────────────────────────
+// Used by BLEMeshService when this device is a gateway (has internet)
+// and receives another user's SOS via mesh. Uploads directly to Firebase
+// so the govt dashboard sees it without waiting for User A to get internet.
+async function pushSOSToFirebase(data: Record<string, unknown>): Promise<boolean> {
+    try {
+        const id = (data.id as string) || genId();
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 5000);
+        const res = await fetch(`${FIREBASE_URL}/soss/${id}.json`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...data, gatewayRelayed: true, synced: true }),
+            signal: ctrl.signal,
+        });
+        clearTimeout(t);
+        return res.ok;
+    } catch {
+        return false;
+    }
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────
 
 export const sosService = {
@@ -473,6 +517,7 @@ export const sosService = {
 
     // Sync
     flushSyncQueue,
+    pushSOSToFirebase,
     distanceKm,
 };
 
