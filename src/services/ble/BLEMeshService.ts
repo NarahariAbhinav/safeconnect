@@ -23,6 +23,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BleManager, Characteristic, Device, State } from 'react-native-ble-plx';
 import { chatService } from '../chatService';
 import { GovtAction, sosService } from '../sos';
+import { gattServer } from './GattServer';
 
 // ─── SafeConnect BLE Identity (fixed UUIDs so all devices recognise each other)
 export const SC_SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
@@ -50,8 +51,11 @@ class BLEMeshServiceClass {
     private isScanning: boolean = false;
     private listeners: ((pkt: MeshPacket) => void)[] = [];
     private _ready: boolean = false;
-    public _peerCount: number = 0;  // Tracks nearby connected peers
-    private connectedDevices: Set<string> = new Set();  // Track connected device IDs
+    public _peerCount: number = 0;
+    private connectedDevices: Set<string> = new Set();
+    // Track discovered peers with timestamps for TTL-based peer count
+    private discoveredPeers: Map<string, number> = new Map();
+    private static PEER_TTL_MS = 120_000;  // Peer expires after 2 minutes of no contact
 
     // ── Init ──────────────────────────────────────────────────────────────
     async init(): Promise<boolean> {
@@ -72,6 +76,10 @@ class BLEMeshServiceClass {
                         sub.remove();
                         this._ready = true;
                         console.log('[BLE] ✅ Ready - Bluetooth is ON');
+
+                        // Start native GATT server so other phones can discover us
+                        this._startGattServer();
+
                         resolve(true);
                     } else if (state === State.PoweredOff) {
                         clearTimeout(timeoutId);
@@ -95,17 +103,39 @@ class BLEMeshServiceClass {
     }
 
     get ready() { return this._ready; }
-    getPeerCount(): number { return this._peerCount; }
+    getPeerCount(): number {
+        // Clean up expired peers and return accurate count
+        const now = Date.now();
+        for (const [id, ts] of this.discoveredPeers) {
+            if (now - ts > BLEMeshServiceClass.PEER_TTL_MS) {
+                this.discoveredPeers.delete(id);
+            }
+        }
+        this._peerCount = this.discoveredPeers.size;
+        return this._peerCount;
+    }
 
-    // ── Broadcast a packet (Peripheral/Advertising via GATT characteristic)
-    // Note: react-native-ble-plx is Central-only on Android.
-    // We simulate "advertising" by writing to connected devices we discover.
-    //
-    // TRUE advertising requires a separate peripheral library.
-    // For the MVP demo: we use scan → connect → write pattern (Central → Central relay)
+    // ── Broadcast a packet (now uses BOTH Central writes AND Peripheral GATT server)
+    // 1. Enqueue to relay queue for Central→Central push
+    // 2. Update GATT server payload so scanning devices can READ from us
+    // 3. Scan and write to nearby devices (Central role)
     async broadcast(pkt: MeshPacket): Promise<void> {
         if (!this._ready) return;
         await this._enqueueRelay(pkt);
+
+        // Update GATT server characteristic so other scanning devices can read this packet
+        if (gattServer.running) {
+            try {
+                const jsonStr = JSON.stringify(pkt);
+                // Convert to Base64 for the native module
+                const base64 = this._toBase64(jsonStr);
+                await gattServer.setPayload(base64);
+                console.log('[BLE] GATT server payload updated for broadcast');
+            } catch (e) {
+                console.warn('[BLE] Failed to update GATT payload:', e);
+            }
+        }
+
         await this._scanAndRelay();
     }
 
@@ -134,20 +164,36 @@ class BLEMeshServiceClass {
     }
 
 
-    // ── Internal: scan for SafeConnect GATT service, connect, read packet ──
+    // ── Internal: scan for nearby BLE devices, connect and check for SafeConnect service ──
+    // Note: We scan WITHOUT UUID filter because react-native-ble-plx is Central-only
+    // and other SafeConnect devices cannot advertise the service UUID.
+    // Instead we scan for all devices, connect, and check if they have our service.
     private _scan(): void {
+        const triedDevices = new Set<string>();  // Avoid re-trying same device in one scan window
+
         this.manager!.startDeviceScan(
-            [SC_SERVICE_UUID],   // only match SafeConnect devices
+            null,   // scan ALL BLE devices (Central-only mode — no device advertises our UUID)
             { allowDuplicates: false },
             async (error, device) => {
                 if (error) {
                     console.warn('[BLE] Scan error:', error.message);
-                    // Restart scan on transient errors
                     setTimeout(() => this._scan(), 5000);
                     return;
                 }
-                if (!device) return;
-                console.log('[BLE] Found device:', device.id, device.name ?? 'unnamed');
+                if (!device || !device.id) return;
+                // Skip devices we already tried this scan window
+                if (triedDevices.has(device.id)) return;
+                triedDevices.add(device.id);
+
+                // Log discovery (useful for debugging)
+                const name = device.name || device.localName || 'unnamed';
+                console.log('[BLE] Discovered device:', device.id, name);
+
+                // Track as a nearby peer (even before verifying SafeConnect service)
+                this.discoveredPeers.set(device.id, Date.now());
+                this._peerCount = this.discoveredPeers.size;
+
+                // Try to connect and check for SafeConnect service
                 await this._connectAndRead(device);
             }
         );
@@ -164,24 +210,33 @@ class BLEMeshServiceClass {
 
     private async _connectAndRead(device: Device): Promise<void> {
         try {
-            const connected = await device.connect({ timeout: 8000 });
-            
-            // Track this device as connected
+            const connected = await device.connect({ timeout: 5000 });
             this.connectedDevices.add(device.id);
-            this._peerCount = this.connectedDevices.size;
-            console.log(`[BLE] Connected to peer ${device.id}. Total peers: ${this._peerCount}`);
+            console.log(`[BLE] Connected to peer ${device.id}`);
 
             await connected.discoverAllServicesAndCharacteristics();
 
-            const chars: Characteristic[] = await connected.characteristicsForService(SC_SERVICE_UUID);
+            // Check if this device has the SafeConnect service
+            let chars: Characteristic[];
+            try {
+                chars = await connected.characteristicsForService(SC_SERVICE_UUID);
+            } catch {
+                // Not a SafeConnect device — disconnect quietly
+                await connected.cancelConnection();
+                this.connectedDevices.delete(device.id);
+                return;
+            }
             const char = chars.find(c => c.uuid.toLowerCase() === SC_CHAR_UUID.toLowerCase());
             if (!char) {
                 await connected.cancelConnection();
-                // Remove from tracking
                 this.connectedDevices.delete(device.id);
-                this._peerCount = this.connectedDevices.size;
                 return;
             }
+
+            // Confirmed SafeConnect peer — update tracking with fresh timestamp
+            this.discoveredPeers.set(device.id, Date.now());
+            this._peerCount = this.discoveredPeers.size;
+            console.log(`[BLE] ✅ SafeConnect peer confirmed: ${device.id}. Peers: ${this._peerCount}`);
 
             // Read the characteristic value (Base64 encoded JSON)
             const read = await char.read();
@@ -204,18 +259,14 @@ class BLEMeshServiceClass {
             }
 
             await connected.cancelConnection();
-            
-            // Remove from tracking after disconnect
             this.connectedDevices.delete(device.id);
-            this._peerCount = this.connectedDevices.size;
+            // Don't reset _peerCount here — discoveredPeers map tracks with TTL
             
             await this._handleIncoming(pkt);
         } catch (e: any) {
             // Connection errors are common in BLE — just log and move on
             console.log('[BLE] Connection error for', device.id, ':', e?.message ?? e);
-            // Clean up tracking on error
             this.connectedDevices.delete(device.id);
-            this._peerCount = this.connectedDevices.size;
         }
     }
 
@@ -366,8 +417,8 @@ class BLEMeshServiceClass {
         const raw = await AsyncStorage.getItem(KEY_SEEN);
         const seen: string[] = raw ? JSON.parse(raw) : [];
         seen.push(id);
-        // Keep only last 200 IDs
-        if (seen.length > 200) seen.splice(0, seen.length - 200);
+        // Keep only last 500 IDs
+        if (seen.length > 500) seen.splice(0, seen.length - 500);
         await AsyncStorage.setItem(KEY_SEEN, JSON.stringify(seen));
     }
 
@@ -381,8 +432,8 @@ class BLEMeshServiceClass {
         const queue = await this._getRelayQueue();
         if (!queue.find(p => p.id === pkt.id)) {
             queue.push(pkt);
-            // Keep max 50 packets
-            if (queue.length > 50) queue.splice(0, queue.length - 50);
+            // Keep max 100 packets
+            if (queue.length > 100) queue.splice(0, queue.length - 100);
             await AsyncStorage.setItem(KEY_QUEUE, JSON.stringify(queue));
         }
     }
@@ -426,10 +477,79 @@ class BLEMeshServiceClass {
 
     destroy(): void {
         this.stopScanning();
+        // Stop GATT server
+        gattServer.stop().catch(() => {});
+        gattServer.removeAllHandlers();
         this.manager?.destroy();
         this.manager = null;
         this._ready = false;
         this.listeners = [];
+        this.discoveredPeers.clear();
+    }
+
+    // ── Start native GATT server (Peripheral role) ─────────────────────
+    private async _startGattServer(): Promise<void> {
+        if (!gattServer.available) {
+            console.log('[BLE] GATT server not available (non-Android or module not linked)');
+            return;
+        }
+
+        try {
+            const result = await gattServer.start();
+            console.log('[BLE] GATT server started:', result);
+
+            // Listen for incoming packets written by other devices
+            gattServer.onPacketReceived(async (base64Data: string, deviceId: string) => {
+                try {
+                    const jsonStr = this._fromBase64(base64Data);
+                    const pkt: MeshPacket = JSON.parse(jsonStr);
+                    console.log('[BLE] 📥 Packet received via GATT server from', deviceId, '- type:', pkt.type);
+
+                    // Track this device as a peer
+                    this.discoveredPeers.set(deviceId, Date.now());
+                    this._peerCount = this.discoveredPeers.size;
+
+                    // Process the incoming packet (dedup, relay, notify listeners)
+                    await this._handleIncoming(pkt);
+                } catch (e) {
+                    console.warn('[BLE] Failed to parse GATT server packet:', e);
+                }
+            });
+
+            // Track peer connections from the GATT server
+            gattServer.onPeerConnected((deviceId: string, count: number) => {
+                this.discoveredPeers.set(deviceId, Date.now());
+                this._peerCount = this.discoveredPeers.size;
+                console.log(`[BLE] GATT peer connected: ${deviceId} (${count} via server)`);
+            });
+
+            gattServer.onPeerDisconnected((deviceId: string, _count: number) => {
+                // Don't remove immediately — let TTL handle expiry
+                console.log(`[BLE] GATT peer disconnected: ${deviceId}`);
+            });
+
+        } catch (e) {
+            console.warn('[BLE] GATT server start failed:', e);
+        }
+    }
+
+    // ── Base64 helpers (works without Buffer polyfill) ──────────────────
+    private _toBase64(str: string): string {
+        // Use a simple approach that works in React Native
+        try {
+            return btoa(unescape(encodeURIComponent(str)));
+        } catch {
+            // Fallback: use Buffer if available
+            return Buffer.from(str, 'utf8').toString('base64');
+        }
+    }
+
+    private _fromBase64(base64: string): string {
+        try {
+            return decodeURIComponent(escape(atob(base64)));
+        } catch {
+            return Buffer.from(base64, 'base64').toString('utf8');
+        }
     }
 }
 
