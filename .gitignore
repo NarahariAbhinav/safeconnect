@@ -38,4 +38,4 @@ yarn-error.*
 
 # generated native folders
 /ios
-/android
+# /android is tracked because we have custom native Kotlin modules (GATT server)

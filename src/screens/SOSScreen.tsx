@@ -198,17 +198,23 @@ const SOSScreen: React.FC<Props> = ({ navigation, route }) => {
     const [govtAction, setGovtAction] = useState<GovtAction | null>(null);
     const [batteryInfo, setBatteryInfo] = useState<{ percent: string; icon: string; color: string }>({ percent: '—', icon: '🔋', color: '#2A7A5A' });
     const [peerCount, setPeerCount] = useState(0);
+    const knownPeers = useRef<Map<string, number>>(new Map());  // peer origin → last seen timestamp
     const prevConnected = useRef<boolean | null>(null);
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const peerCleanupRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     // ── Check connectivity via lightweight ping ──
     const checkConnectivity = useCallback(async () => {
         try {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 4000);
             const res = await fetch('https://www.google.com/generate_204', {
                 method: 'HEAD',
                 cache: 'no-cache',
+                signal: controller.signal,
             });
+            clearTimeout(timer);
             const online = res.ok || res.status === 204;
             setIsConnected(online);
 
@@ -273,9 +279,15 @@ const SOSScreen: React.FC<Props> = ({ navigation, route }) => {
                 console.log('[SOSScreen] Mesh ready ✅');
                 bleMeshService.startScanning((pkt) => {
                     console.log('[SOSScreen] Mesh packet received:', pkt.type, 'hops:', pkt.hops);
-                    // Count unique peers from heartbeat packets
-                    if (pkt.type === 'ping') {
-                        setPeerCount(prev => prev + 1);
+                    // Track unique peers by origin with timestamp
+                    if (pkt.type === 'ping' && pkt.origin !== userId) {
+                        knownPeers.current.set(pkt.origin, Date.now());
+                        // Clean expired peers (2 min TTL)
+                        const now = Date.now();
+                        for (const [id, ts] of knownPeers.current) {
+                            if (now - ts > 120_000) knownPeers.current.delete(id);
+                        }
+                        setPeerCount(knownPeers.current.size);
                     }
                     // Alert user when a real SOS comes in from a nearby device
                     if (pkt.type === 'sos' && pkt.origin !== userId) {
@@ -290,6 +302,13 @@ const SOSScreen: React.FC<Props> = ({ navigation, route }) => {
             }
         });
 
+        // Also update peer count from BLE service's discovered devices
+        peerCleanupRef.current = setInterval(() => {
+            const blePeers = bleMeshService.getPeerCount();
+            const meshPeers = knownPeers.current.size;
+            setPeerCount(Math.max(blePeers, meshPeers));
+        }, 15_000);
+
         return () => {
             clearInterval(pingInterval);
             bleMeshService.stopScanning();
@@ -297,6 +316,7 @@ const SOSScreen: React.FC<Props> = ({ navigation, route }) => {
             batteryService.destroy();
             removeBatteryListener();
             if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+            if (peerCleanupRef.current) clearInterval(peerCleanupRef.current);
             soundService.destroy();
         };
     }, [checkConnectivity]);
@@ -394,19 +414,26 @@ const SOSScreen: React.FC<Props> = ({ navigation, route }) => {
             `Sent via SafeConnect`;
 
         if (phones.length > 0) {
-            const isAvailable = await SMS.isAvailableAsync();
-            if (isAvailable) {
-                // ONE compose sheet — all contacts pre-loaded — user taps Send ONCE
-                await SMS.sendSMSAsync(phones, message);
-                setSosStatus(isConnected ? 'sent' : 'queued');
-            } else {
-                // Fallback: open default SMS app for first contact only
-                try {
-                    await Linking.openURL(
-                        `sms:${phones[0]}?body=${encodeURIComponent(message)}`
-                    );
+            try {
+                const smsCheckPromise = SMS.isAvailableAsync();
+                const timeoutPromise = new Promise<boolean>(resolve => setTimeout(() => resolve(false), 5000));
+                const isAvailable = await Promise.race([smsCheckPromise, timeoutPromise]);
+                if (isAvailable) {
+                    // ONE compose sheet — all contacts pre-loaded — user taps Send ONCE
+                    await SMS.sendSMSAsync(phones, message);
                     setSosStatus(isConnected ? 'sent' : 'queued');
-                } catch { setSosStatus('queued'); }
+                } else {
+                    // Fallback: open default SMS app for first contact only
+                    try {
+                        await Linking.openURL(
+                            `sms:${phones[0]}?body=${encodeURIComponent(message)}`
+                        );
+                        setSosStatus(isConnected ? 'sent' : 'queued');
+                    } catch { setSosStatus('queued'); }
+                }
+            } catch (e) {
+                console.warn('[SOS] SMS check failed:', e);
+                setSosStatus('queued');
             }
         } else {
             setSosStatus('queued'); // No contacts yet

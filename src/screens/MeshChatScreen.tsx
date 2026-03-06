@@ -19,6 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { bleBackgroundRelayService } from '../services/ble/BLEBackgroundRelayService';
 import { bleMeshService } from '../services/ble/BLEMeshService';
+import { meshChatHelper } from '../services/ble/MeshChatHelper';
 import { ChatMessage, chatService } from '../services/chatService';
 import { contactsService, TrustedContact } from '../services/contacts';
 
@@ -106,7 +107,7 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
                 });
                 setTimeout(() => flatRef.current?.scrollToEnd({ animated: true }), 100);
             }
-        }, 3000); // Poll every 3s for faster updates
+        }, 8000); // Poll every 8s (battery-friendly)
     }, [userId]);
 
     // ── BLE listener: update chat live when a mesh packet arrives ──
@@ -139,16 +140,20 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
         bleMeshService.addListener(handleBlePacket);
         console.log('[MeshChat] BLE listener registered for room:', roomId);
 
-        // Trigger a relay attempt to send any pending messages
-        if (bleBackgroundRelayService.active) {
-            bleBackgroundRelayService.forceRelay().catch(e => {
-                console.warn('[MeshChat] Force relay failed:', e);
-            });
-        }
+        // Start background relay service to keep retrying pending messages
+        bleBackgroundRelayService.startRelay().catch(e => {
+            console.warn('[MeshChat] Background relay start failed:', e);
+        });
+
+        // Also relay any pending mesh chat messages
+        meshChatHelper.relayPendingMessages().catch(e => {
+            console.warn('[MeshChat] Relay pending messages failed:', e);
+        });
 
         return () => {
             bleMeshService.removeListener(handleBlePacket);
-            console.log('[MeshChat] BLE listener unregistered');
+            bleBackgroundRelayService.stopRelay();
+            console.log('[MeshChat] BLE listener unregistered, relay stopped');
         };
     }, [activeContact, userId]);
 
@@ -174,12 +179,18 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
                     const pkt = bleMeshService.createChatPacket(userId, msg.roomId, msg);
                     // Queue for relay + try to send immediately
                     await bleMeshService.broadcast(pkt);
+                    // Also queue via MeshChatHelper for persistent retry
+                    await meshChatHelper.queueForMeshRelay(msg.roomId, msg);
                     console.log('[MeshChat] Message queued for BLE mesh relay ✅');
                 } catch (e) {
                     console.warn('[MeshChat] BLE mesh unavailable, but message saved locally:', (e as any)?.message);
+                    // Still queue for later relay even if broadcast fails
+                    await meshChatHelper.queueForMeshRelay(msg.roomId, msg);
                 }
             } else {
                 console.warn('[MeshChat] BLE not ready, message saved locally only');
+                // Queue for relay when BLE becomes available
+                await meshChatHelper.queueForMeshRelay(msg.roomId, msg);
             }
         } catch (e) {
             console.error('[MeshChat] Send failed:', e);
