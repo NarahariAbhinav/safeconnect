@@ -43,6 +43,7 @@ import { bleBackgroundRelayService } from '../services/ble/BLEBackgroundRelaySer
 import { bleMeshService } from '../services/ble/BLEMeshService';
 import { TrustedContact, contactsService } from '../services/contacts';
 import { locationService } from '../services/location';
+import { permissionService } from '../services/permissionService';
 import LocationSharingModal from './LocationSharingModal_v2';
 
 // expo-intent-launcher is native-only — lazy load to avoid crash in Expo Go
@@ -699,7 +700,7 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                     const timer = setTimeout(() => setShowPermModal(true), 600);
                     return () => clearTimeout(timer);
                 }
-            } catch {}
+            } catch { }
         };
         checkFirstLaunch();
     }, []);
@@ -787,7 +788,7 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
         setShowPermModal(false);
 
         // Mark as shown so it doesn't appear again
-        try { await AsyncStorage.setItem('safeconnect_perms_shown', 'true'); } catch {}
+        try { await AsyncStorage.setItem('safeconnect_perms_shown', 'true'); } catch { }
 
         // ── Step 1: Grant runtime permissions (Android only) ──────────
         if (Platform.OS === 'android') {
@@ -859,6 +860,23 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                 ]
             );
         }, 1500);
+
+        // ── Step 5: Auto-start mesh after giving user time to enable BT/WiFi ──
+        // Delayed so the user can toggle system settings first
+        setTimeout(() => {
+            permissionService.enableMesh({
+                displayName: userName,
+                showEnabledAlert: false,
+            }).then(ok => {
+                if (ok) {
+                    console.log('[HomeScreen] ✅ Mesh auto-started after permission grant');
+                } else {
+                    console.log('[HomeScreen] Mesh could not start — user may need to enable BT/WiFi/Location');
+                }
+            }).catch(e => {
+                console.warn('[HomeScreen] Mesh auto-start error:', e);
+            });
+        }, 3000);
     };
 
     // ── LOGOUT ──

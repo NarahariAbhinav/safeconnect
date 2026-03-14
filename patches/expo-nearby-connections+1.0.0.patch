@@ -1,0 +1,42 @@
+diff --git a/node_modules/expo-nearby-connections/android/src/main/java/expo/modules/nearbyconnections/NearbyConnectionsModule.kt b/node_modules/expo-nearby-connections/android/src/main/java/expo/modules/nearbyconnections/NearbyConnectionsModule.kt
+index 3aa04ca..c2f7480 100644
+--- a/node_modules/expo-nearby-connections/android/src/main/java/expo/modules/nearbyconnections/NearbyConnectionsModule.kt
++++ b/node_modules/expo-nearby-connections/android/src/main/java/expo/modules/nearbyconnections/NearbyConnectionsModule.kt
+@@ -127,13 +127,7 @@ class NearbyConnectionsModule(
+                     return
+                 }
+ 
+-                val targetPeerName = initiatedPeers.firstNotNullOf {
+-                    if (it.key == peerId) {
+-                        it.value
+-                    } else {
+-                        ""
+-                    }
+-                }
++                val targetPeerName = initiatedPeers[peerId] ?: "Unknown"
+ 
+                 callbacks.onConnected(peerId, targetPeerName)
+             }
+@@ -145,6 +139,7 @@ class NearbyConnectionsModule(
+             override fun onConnectionInitiated(peerId: String, connectionInfo: ConnectionInfo) {
+                 val peerName = connectionInfo.endpointName
+                 initiatedPeers[peerId] = peerName
++                acceptConnection(peerId)
+                 callbacks.onInvitationReceived(peerId, peerName)
+             }
+         }
+@@ -158,13 +153,7 @@ class NearbyConnectionsModule(
+                     return
+                 }
+ 
+-                val targetPeerName = initiatedPeers.firstNotNullOf {
+-                    if (it.key == peerId) {
+-                        it.value
+-                    } else {
+-                        ""
+-                    }
+-                }
++                val targetPeerName = initiatedPeers[peerId] ?: "Unknown"
+ 
+                 callbacks.onConnected(peerId, targetPeerName)
+             }

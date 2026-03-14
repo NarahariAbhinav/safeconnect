@@ -36,6 +36,14 @@ export interface MeshPacket {
   createdAt: number;
 }
 
+// UI event emitted at every connection lifecycle step — screens subscribe
+// to show Bluetooth-style popups without any internet required.
+export interface MeshUIEvent {
+  event: 'found' | 'connecting' | 'invitation' | 'connected' | 'disconnected';
+  peerId: string;
+  peerName: string;
+}
+
 const MAX_HOPS    = 5;
 const TTL_MS      = 12 * 60 * 60 * 1000;  // 12 hours
 const KEY_SEEN    = 'ble_seen_packets';    // dedup store
@@ -47,14 +55,49 @@ class BLEMeshServiceClass {
   private _ready        = false;
   private _initialized  = false;
   private peers         = new Set<string>();  // currently connected peer IDs
+  private pendingPeers  = new Set<string>();
   private listeners: ((pkt: MeshPacket) => void)[] = [];
   private unsubs: Array<() => void> = [];
   private _name         = 'SafeConnect';
+  private peerNames     = new Map<string, string>(); // peerId → display name
+  private uiListeners:  ((e: MeshUIEvent) => void)[] = [];
+  private requestTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   // ── Public getters ─────────────────────────────────────────────
   get ready()      { return this._ready; }
   get _peerCount() { return this.peers.size; }
   getPeerCount()   { return this.peers.size; }
+
+  // ── UI event subscription (for connection popups in screens) ───
+  addUIListener(cb: (e: MeshUIEvent) => void): void {
+    if (!this.uiListeners.includes(cb)) this.uiListeners.push(cb);
+  }
+  removeUIListener(cb: (e: MeshUIEvent) => void): void {
+    this.uiListeners = this.uiListeners.filter(l => l !== cb);
+  }
+  private _emitUI(e: MeshUIEvent): void {
+    this.uiListeners.forEach(cb => { try { cb(e); } catch {} });
+  }
+
+  private _shouldInitiateConnection(peerName: string): boolean {
+    const local = this._name.trim().toLowerCase();
+    const remote = peerName.trim().toLowerCase();
+    if (local && remote && local !== remote) return local > remote;
+    return true;
+  }
+
+  private _getRequestDelay(peerId: string): number {
+    let hash = 0;
+    for (let i = 0; i < peerId.length; i++) hash = ((hash << 5) - hash) + peerId.charCodeAt(i);
+    return 700 + (Math.abs(hash) % 600) + Math.floor(Math.random() * 300);
+  }
+
+  private _clearPendingPeer(peerId: string): void {
+    const timer = this.requestTimers.get(peerId);
+    if (timer) clearTimeout(timer);
+    this.requestTimers.delete(peerId);
+    this.pendingPeers.delete(peerId);
+  }
 
   // ── init() — call once on app launch ───────────────────────────
   async init(displayName?: string): Promise<boolean> {
@@ -107,18 +150,43 @@ class BLEMeshServiceClass {
     // Peer discovered (we are discovering, peer is advertising)
     this.unsubs.push(
       Nearby.onPeerFound(({ peerId, name }: any) => {
-        console.log('[Nearby] Peer found:', peerId, name);
-        // Automatically request connection — no manual pairing needed
-        Nearby.requestConnection(peerId).catch((e: any) =>
-          console.warn('[Nearby] requestConnection failed:', e?.message)
-        );
+        const peerName = (name && name.trim()) ? name : `Device-${peerId.slice(-4)}`;
+        this.peerNames.set(peerId, peerName);
+        console.log('[Nearby] Peer found:', peerId, peerName);
+        this._emitUI({ event: 'found', peerId, peerName });
+
+        if (this.peers.has(peerId) || this.pendingPeers.has(peerId) || this.requestTimers.has(peerId)) {
+          return;
+        }
+
+        // Reduce symmetric request collisions: prefer one initiator when names differ,
+        // otherwise use a short randomized backoff and cancel if an incoming invite appears.
+        if (!this._shouldInitiateConnection(peerName)) {
+          console.log('[Nearby] Waiting for peer to initiate connection:', peerName);
+          return;
+        }
+
+        const delay = this._getRequestDelay(peerId);
+        const timer = setTimeout(() => {
+          this.requestTimers.delete(peerId);
+          if (this.peers.has(peerId) || this.pendingPeers.has(peerId)) return;
+          this.pendingPeers.add(peerId);
+          Nearby.requestConnection(peerId)
+            .then(() => this._emitUI({ event: 'connecting', peerId, peerName }))
+            .catch((e: any) => console.warn('[Nearby] requestConnection failed:', e?.message))
+            .finally(() => this.pendingPeers.delete(peerId));
+        }, delay);
+        this.requestTimers.set(peerId, timer);
       })
     );
 
     // Peer went out of range
     this.unsubs.push(
       Nearby.onPeerLost(({ peerId }: any) => {
+        const peerName = this.peerNames.get(peerId) ?? `Device-${peerId.slice(-4)}`;
+        this._clearPendingPeer(peerId);
         this.peers.delete(peerId);
+        this._emitUI({ event: 'disconnected', peerId, peerName });
         console.log('[Nearby] Peer lost:', peerId, '| Peers now:', this.peers.size);
       })
     );
@@ -126,7 +194,11 @@ class BLEMeshServiceClass {
     // Incoming connection request (we are advertising, peer is discovering)
     this.unsubs.push(
       Nearby.onInvitationReceived(({ peerId, name }: any) => {
-        console.log('[Nearby] Incoming invitation from:', peerId, name);
+        const peerName = (name && name.trim()) ? name : (this.peerNames.get(peerId) ?? `Device-${peerId.slice(-4)}`);
+        this._clearPendingPeer(peerId);
+        this.peerNames.set(peerId, peerName);
+        console.log('[Nearby] Incoming invitation from:', peerId, peerName);
+        this._emitUI({ event: 'invitation', peerId, peerName });
         // Always accept — SafeConnect is a trusted community app
         Nearby.acceptConnection(peerId).catch((e: any) =>
           console.warn('[Nearby] acceptConnection failed:', e?.message)
@@ -137,8 +209,12 @@ class BLEMeshServiceClass {
     // Connection fully established (both sides accepted)
     this.unsubs.push(
       Nearby.onConnected(async ({ peerId, name }: any) => {
+        const peerName = (name && name.trim()) ? name : (this.peerNames.get(peerId) ?? `Device-${peerId.slice(-4)}`);
+        this._clearPendingPeer(peerId);
+        this.peerNames.set(peerId, peerName);
         this.peers.add(peerId);
-        console.log('[Nearby] ✅ Connected to', peerId, name, '| Peers:', this.peers.size);
+        this._emitUI({ event: 'connected', peerId, peerName });
+        console.log('[Nearby] ✅ Connected to', peerId, peerName, '| Peers:', this.peers.size);
         // Immediately push any queued packets to the new peer
         await this._flushQueueTo(peerId);
       })
@@ -147,7 +223,10 @@ class BLEMeshServiceClass {
     // Peer disconnected
     this.unsubs.push(
       Nearby.onDisconnected(({ peerId }: any) => {
+        const peerName = this.peerNames.get(peerId) ?? `Device-${peerId.slice(-4)}`;
+        this._clearPendingPeer(peerId);
         this.peers.delete(peerId);
+        this._emitUI({ event: 'disconnected', peerId, peerName });
         console.log('[Nearby] Disconnected from', peerId, '| Peers:', this.peers.size);
       })
     );
@@ -370,9 +449,12 @@ class BLEMeshServiceClass {
   // (govt dashboard can see contact numbers and call them directly)
   private async _gatewaySync(): Promise<boolean> {
     try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 3000);
       const r = await fetch('https://www.google.com/generate_204', {
-        method: 'HEAD', cache: 'no-cache',
+        method: 'HEAD', cache: 'no-cache', signal: ctrl.signal,
       });
+      clearTimeout(t);
       if (!r.ok && r.status !== 204) return false;
     } catch {
       return false; // offline
@@ -440,6 +522,11 @@ class BLEMeshServiceClass {
     this.unsubs.forEach(fn => { try { fn(); } catch {} });
     this.unsubs = [];
     this.listeners = [];
+    this.uiListeners = [];
+    this.requestTimers.forEach(timer => clearTimeout(timer));
+    this.requestTimers.clear();
+    this.pendingPeers.clear();
+    this.peerNames.clear();
     try { Nearby.stopAdvertise(); }  catch {}
     try { Nearby.stopDiscovery(); }  catch {}
     try { Nearby.disconnect(); }     catch {}

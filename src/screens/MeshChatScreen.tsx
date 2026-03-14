@@ -48,6 +48,17 @@ const SendIcon = () => (
 type Params = { MeshChat: { userId: string; userName: string } };
 type Props = NativeStackScreenProps<Params, 'MeshChat'>;
 
+// ─── Mesh Group Chat constants ──────────────────────────────────────────
+const MESH_GROUP_ID   = '__mesh_broadcast__';
+const MESH_GROUP_ROOM = 'mesh_broadcast';
+const meshGroupContact: TrustedContact = {
+    id:                  MESH_GROUP_ID,
+    name:                'Mesh Group Chat',
+    phone:               '',
+    relationship:        'All nearby SafeConnect users',
+    isEmergencyContact:  false,
+};
+
 const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
     const { userId, userName } = route.params;
 
@@ -85,11 +96,18 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
         messagesRef.current = [];
         setScreen('chat');
 
+        const isGroup = contact.id === MESH_GROUP_ID;
+
         // Load local messages first (instant)
-        const localMsgs = await chatService.getMessages(userId, contact.id);
+        const localMsgs = isGroup
+            ? await chatService.getMessagesByRoomId(MESH_GROUP_ROOM)
+            : await chatService.getMessages(userId, contact.id);
         setMessages(localMsgs);
         messagesRef.current = localMsgs;
         setTimeout(() => flatRef.current?.scrollToEnd({ animated: false }), 100);
+
+        // Group chat is purely BLE — no Firebase polling needed
+        if (isGroup) return;
 
         if (pollRef.current) clearInterval(pollRef.current);
         pollRef.current = setInterval(async () => {
@@ -113,7 +131,8 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
     // ── BLE listener: update chat live when a mesh packet arrives ──
     useEffect(() => {
         if (!activeContact) return;
-        const roomId = chatService.getRoomId(userId, activeContact.id);
+        const isGroup = activeContact.id === MESH_GROUP_ID;
+        const roomId = isGroup ? MESH_GROUP_ROOM : chatService.getRoomId(userId, activeContact.id);
 
         const handleBlePacket = (pkt: any) => {
             if (pkt.type !== 'chat') return;
@@ -166,30 +185,45 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
         setInputText('');
         setSending(true);
 
+        const isGroup = activeContact.id === MESH_GROUP_ID;
+
         try {
-            // Store message locally first
-            const msg = await chatService.sendMessage(userId, userName, activeContact.id, activeContact.name, text);
+            let msg: ChatMessage;
+
+            if (isGroup) {
+                // Group chat: save directly to mesh_broadcast room, no Firebase
+                const genId = () => `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+                msg = {
+                    id: genId(),
+                    roomId: MESH_GROUP_ROOM,
+                    senderId: userId,
+                    senderName: userName,
+                    text,
+                    type: 'text',
+                    createdAt: Date.now(),
+                    status: 'saved',
+                };
+                await chatService.saveMessageToRoom(MESH_GROUP_ROOM, msg);
+            } else {
+                // Contact chat: save + auto-sync to Firebase when online
+                msg = await chatService.sendMessage(userId, userName, activeContact.id, activeContact.name, text);
+            }
+
             setMessages(prev => [...prev, msg]);
+            messagesRef.current = [...messagesRef.current, msg];
 
             // Broadcast via BLE mesh for offline delivery
-            // This is critical so offline users can communicate
             if (bleMeshService.ready) {
                 try {
-                    console.log('[MeshChat] Broadcasting message via BLE mesh (offline safe)');
                     const pkt = bleMeshService.createChatPacket(userId, msg.roomId, msg);
-                    // Queue for relay + try to send immediately
                     await bleMeshService.broadcast(pkt);
-                    // Also queue via MeshChatHelper for persistent retry
-                    await meshChatHelper.queueForMeshRelay(msg.roomId, msg);
-                    console.log('[MeshChat] Message queued for BLE mesh relay ✅');
+                    if (!isGroup) await meshChatHelper.queueForMeshRelay(msg.roomId, msg);
+                    console.log('[MeshChat] Message broadcast via BLE ✅');
                 } catch (e) {
-                    console.warn('[MeshChat] BLE mesh unavailable, but message saved locally:', (e as any)?.message);
-                    // Still queue for later relay even if broadcast fails
-                    await meshChatHelper.queueForMeshRelay(msg.roomId, msg);
+                    console.warn('[MeshChat] BLE broadcast failed:', (e as any)?.message);
+                    if (!isGroup) await meshChatHelper.queueForMeshRelay(msg.roomId, msg);
                 }
-            } else {
-                console.warn('[MeshChat] BLE not ready, message saved locally only');
-                // Queue for relay when BLE becomes available
+            } else if (!isGroup) {
                 await meshChatHelper.queueForMeshRelay(msg.roomId, msg);
             }
         } catch (e) {
@@ -244,20 +278,42 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
                 <View style={styles.infoCard}>
                     <Text style={{ fontSize: 26 }}>💬</Text>
                     <View style={{ flex: 1 }}>
-                        <Text style={styles.infoTitle}>Chat with your trusted contacts</Text>
+                        <Text style={styles.infoTitle}>Chat with nearby people</Text>
                         <Text style={styles.infoSub}>
-                            Messages save instantly on your phone.{'\n'}
-                            Sync to their phone when either of you has internet.
+                            Mesh Group Chat works with anyone nearby.{'\n'}
+                            Private chats sync when you have internet.
                         </Text>
                     </View>
                 </View>
 
-                {/* Contacts */}
+                {/* Mesh Group Chat — always visible, no contacts needed */}
+                <TouchableOpacity
+                    style={[styles.contactCard, { borderLeftWidth: 3, borderLeftColor: C.orange, marginHorizontal: 16, marginBottom: 4 }]}
+                    onPress={() => openChat(meshGroupContact)}
+                    activeOpacity={0.8}
+                >
+                    <View style={[styles.avatar, { backgroundColor: 'rgba(230,81,0,0.12)' }]}>
+                        <Text style={{ fontSize: 20 }}>📡</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                        <Text style={[styles.contactName, { color: C.orange }]}>Mesh Group Chat</Text>
+                        <Text style={styles.contactMeta}>
+                            {bleMeshService.getPeerCount() > 0
+                                ? `${bleMeshService.getPeerCount()} peer${bleMeshService.getPeerCount() === 1 ? '' : 's'} connected — works offline`
+                                : 'Turn on mesh first to chat with nearby users'}
+                        </Text>
+                    </View>
+                    <View style={styles.arrowWrap}>
+                        <Text style={[styles.arrowText, { color: C.orange }]}>→</Text>
+                    </View>
+                </TouchableOpacity>
+
+                {/* Trusted contacts (private chats) */}
                 {contacts.length === 0 ? (
-                    <View style={styles.empty}>
-                        <Text style={{ fontSize: 48, textAlign: 'center' }}>👥</Text>
-                        <Text style={styles.emptyTitle}>No Contacts Yet</Text>
-                        <Text style={styles.emptySub}>Add trusted contacts from the Home screen first.</Text>
+                    <View style={[styles.empty, { marginTop: 8 }]}>
+                        <Text style={{ fontSize: 32, textAlign: 'center' }}>👥</Text>
+                        <Text style={styles.emptyTitle}>No Private Contacts Yet</Text>
+                        <Text style={styles.emptySub}>Use Mesh Group Chat above to talk to nearby users right now. Add contacts for private encrypted chats.</Text>
                         <TouchableOpacity
                             style={styles.addBtn}
                             onPress={() => (navigation as any).navigate('ContactsManager')}
@@ -303,12 +359,18 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
                     <TouchableOpacity style={styles.backBtn} onPress={() => { setScreen('list'); if (pollRef.current) clearInterval(pollRef.current); }} activeOpacity={0.7}>
                         <BackIcon />
                     </TouchableOpacity>
-                    <View style={[styles.avatar, { width: 38, height: 38, borderRadius: 11 }]}>
-                        <Text style={styles.avatarText}>{initials(activeContact?.name ?? '?')}</Text>
+                    <View style={[styles.avatar, { width: 38, height: 38, borderRadius: 11, backgroundColor: activeContact?.id === MESH_GROUP_ID ? 'rgba(230,81,0,0.12)' : undefined }]}>
+                        <Text style={[styles.avatarText, activeContact?.id === MESH_GROUP_ID ? { color: C.orange } : {}]}>
+                            {activeContact?.id === MESH_GROUP_ID ? '📡' : initials(activeContact?.name ?? '?')}
+                        </Text>
                     </View>
                     <View style={{ flex: 1 }}>
                         <Text style={styles.headerTitle}>{activeContact?.name}</Text>
-                        <Text style={styles.headerSub}>{activeContact?.relationship} · {activeContact?.phone}</Text>
+                        <Text style={styles.headerSub}>
+                            {activeContact?.id === MESH_GROUP_ID
+                                ? `${bleMeshService.getPeerCount()} peer${bleMeshService.getPeerCount() === 1 ? '' : 's'} connected · BLE mesh`
+                                : `${activeContact?.relationship} · ${activeContact?.phone}`}
+                        </Text>
                     </View>
                     <OnlineBadge />
                 </View>
@@ -323,11 +385,14 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
                     contentContainerStyle={styles.msgList}
                     ListEmptyComponent={
                         <View style={styles.emptyChat}>
-                            <Text style={{ fontSize: 40, textAlign: 'center', marginBottom: 12 }}>👋</Text>
+                            <Text style={{ fontSize: 40, textAlign: 'center', marginBottom: 12 }}>
+                                {activeContact?.id === MESH_GROUP_ID ? '📡' : '👋'}
+                            </Text>
                             <Text style={styles.emptyChatTitle}>Start the conversation</Text>
                             <Text style={styles.emptyChatSub}>
-                                Messages save on your phone instantly.{'\n'}
-                                Delivered to {activeContact?.name} when either of you has internet.
+                                {activeContact?.id === MESH_GROUP_ID
+                                    ? 'Messages go to all connected mesh peers instantly. No internet needed.'
+                                    : `Messages save on your phone instantly.\nDelivered to ${activeContact?.name} when either of you has internet.`}
                             </Text>
                         </View>
                     }

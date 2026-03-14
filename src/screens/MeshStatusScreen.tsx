@@ -3,7 +3,7 @@
  */
 
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     Alert,
     ScrollView,
@@ -15,7 +15,8 @@ import { Text } from 'react-native-paper';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
-import { bleMeshService, MeshPacket } from '../services/ble/BLEMeshService';
+import { bleMeshService, MeshPacket, MeshUIEvent } from '../services/ble/BLEMeshService';
+import { permissionService } from '../services/permissionService';
 
 // ─── Colors ─────────────────────────────────────────────────────────
 const C = {
@@ -62,12 +63,26 @@ const MeshStatusScreen: React.FC<Props> = ({ navigation, route }) => {
     const userId  = route.params?.userId   ?? 'anonymous';
     const userName = route.params?.userName ?? 'User';
 
-    const [bleReady, setBleReady] = useState<boolean | null>(null);
-    const [scanning, setScanning]  = useState(false);
+    // Initialise from live service state so navigating back doesn't reset the button
+    const [bleReady, setBleReady] = useState<boolean | null>(() => permissionService.isBLEReady());
+    const [scanning, setScanning]  = useState(() => permissionService.isBLEReady());
     const [peerCount, setPeerCount] = useState(0);
     const [activity, setActivity]  = useState<ActivityEntry[]>([]);
 
-    const peerPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    // Connection popup — shown like a Bluetooth pairing notification
+    const [connPopup, setConnPopup] = useState<{
+        visible: boolean; icon: string; title: string; subtitle: string; color: string;
+    }>({ visible: false, icon: '', title: '', subtitle: '', color: C.blue });
+
+    const peerPollRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+    const popupTimerRef = useRef<ReturnType<typeof setTimeout>  | null>(null);
+
+    const showConnPopup = useCallback((icon: string, title: string, subtitle: string, color: string) => {
+        if (popupTimerRef.current) clearTimeout(popupTimerRef.current);
+        setConnPopup({ visible: true, icon, title, subtitle, color });
+        popupTimerRef.current = setTimeout(() =>
+            setConnPopup(prev => ({ ...prev, visible: false })), 3500);
+    }, []);
 
     const addActivity = (icon: string, message: string, color: string) => {
         const entry: ActivityEntry = {
@@ -77,6 +92,46 @@ const MeshStatusScreen: React.FC<Props> = ({ navigation, route }) => {
         };
         setActivity(prev => [entry, ...prev].slice(0, 10));
     };
+
+    const handlePacket = useCallback((pkt: MeshPacket) => {
+        const { icon, message, color } = packetToActivity(pkt);
+        addActivity(icon, message, color);
+        setPeerCount(bleMeshService.getPeerCount());
+    }, []);
+
+    // ── Subscribe to BLE connection events (Bluetooth-style popups) ──
+    useEffect(() => {
+        const handleUI = (e: MeshUIEvent) => {
+            switch (e.event) {
+                case 'found':
+                    showConnPopup('📱', `Found: ${e.peerName}`, 'Requesting connection…', C.blue);
+                    addActivity('🔍', `Found nearby device: ${e.peerName}`, C.blue);
+                    break;
+                case 'connecting':
+                    showConnPopup('🔄', `Connecting to ${e.peerName}…`, 'Please wait', C.blue);
+                    break;
+                case 'invitation':
+                    showConnPopup('📲', `${e.peerName} is connecting`, 'Accepting — joining the mesh…', C.blue);
+                    addActivity('📲', `Incoming connection from ${e.peerName}`, C.blue);
+                    break;
+                case 'connected':
+                    showConnPopup('✅', `Connected to ${e.peerName}!`, 'You can now share emergency data offline', C.green);
+                    addActivity('🔗', `Connected to ${e.peerName}`, C.green);
+                    setPeerCount(bleMeshService.getPeerCount());
+                    break;
+                case 'disconnected':
+                    showConnPopup('📡', `${e.peerName} left the mesh`, 'Device went out of range', C.orange);
+                    addActivity('🔌', `${e.peerName} went out of range`, C.muted);
+                    setPeerCount(bleMeshService.getPeerCount());
+                    break;
+            }
+        };
+        bleMeshService.addUIListener(handleUI);
+        return () => {
+            bleMeshService.removeUIListener(handleUI);
+            if (popupTimerRef.current) clearTimeout(popupTimerRef.current);
+        };
+    }, [showConnPopup]);
 
     // ── Poll peer count every 3 s while mounted ───────────────────────
     useEffect(() => {
@@ -88,16 +143,13 @@ const MeshStatusScreen: React.FC<Props> = ({ navigation, route }) => {
         };
     }, []);
 
-    // ── Init mesh ────────────────────────────────────────────────────
+    // ── Reflect live mesh state ──────────────────────────────────────
     useEffect(() => {
-        bleMeshService.init().then(ready => {
-            setBleReady(ready);
-            if (ready) {
-                addActivity('✅', 'Mesh network is ready on your phone', C.green);
-            } else {
-                addActivity('⚠️', 'Could not start mesh — check Bluetooth, Wi-Fi and Location', C.red);
-            }
-        });
+        setBleReady(permissionService.isBLEReady());
+        setScanning(permissionService.isBLEReady());
+        if (permissionService.isBLEReady()) {
+            addActivity('✅', 'Mesh network is active on your phone', C.green);
+        }
         return () => {
             bleMeshService.stopScanning();
         };
@@ -105,26 +157,26 @@ const MeshStatusScreen: React.FC<Props> = ({ navigation, route }) => {
 
     // ── Turn mesh on ─────────────────────────────────────────────────
     const startMesh = async () => {
-        if (!bleReady) {
-            Alert.alert(
-                'Cannot Start Mesh',
-                'Please make sure Bluetooth, Wi-Fi and Location are turned on, then try again.',
-            );
-            return;
-        }
-        setScanning(true);
-        addActivity('📡', 'Listening for nearby SafeConnect users…', C.blue);
-
-        await bleMeshService.startScanning((pkt: MeshPacket) => {
-            const { icon, message, color } = packetToActivity(pkt);
-            addActivity(icon, message, color);
-            setPeerCount(bleMeshService.getPeerCount());
+        const ready = await permissionService.enableMesh({
+            displayName: userName,
+            onPacket: handlePacket,
+            showEnabledAlert: false,
         });
+
+        setBleReady(ready);
+        setScanning(ready);
+
+        if (ready) {
+            addActivity('📡', 'Listening for nearby SafeConnect users…', C.blue);
+        } else {
+            addActivity('⚠️', 'Could not start mesh — check Bluetooth, Wi-Fi and Location', C.red);
+        }
     };
 
     // ── Turn mesh off ────────────────────────────────────────────────
     const stopMesh = () => {
-        bleMeshService.stopScanning();
+        permissionService.disableMesh();
+        setBleReady(false);
         setScanning(false);
         addActivity('🔇', 'Mesh turned off', C.muted);
     };
@@ -151,24 +203,24 @@ const MeshStatusScreen: React.FC<Props> = ({ navigation, route }) => {
     // ── Derived display values ────────────────────────────────────────
     const statusColor =
         bleReady === null ? C.orange :
-        bleReady && scanning ? C.green :
-        bleReady ? C.blue : C.red;
+        scanning ? C.green :
+        bleReady ? C.blue : C.orange;
 
     const statusEmoji =
         bleReady === null ? '⏳' :
-        bleReady && scanning ? '📡' :
-        bleReady ? '✅' : '❌';
+        scanning ? '📡' :
+        bleReady ? '✅' : '⏸️';
 
     const statusLabel =
         bleReady === null ? 'Starting up…' :
-        bleReady && scanning ? 'Active — listening for people' :
-        bleReady ? 'Ready (not yet listening)' : 'Unavailable';
+        scanning ? 'Active — listening for people' :
+        bleReady ? 'Ready (not yet listening)' : 'Mesh is off';
 
     const statusDesc =
         bleReady === null ? 'Please wait while we set up your mesh.' :
-        bleReady && scanning ? 'Your phone is sharing safety signals with nearby SafeConnect users.' :
-        bleReady ? 'Tap "Turn On Mesh" to start connecting with people nearby.' :
-        'Make sure Bluetooth, Wi-Fi and Location are enabled and try again.';
+        scanning ? 'Your phone is sharing safety signals with nearby SafeConnect users.' :
+        bleReady ? 'Tap "Turn On Mesh" to reconnect with people nearby.' :
+        'Tap "Turn On Mesh". The app will request permissions and start nearby discovery.';
 
     const peerLabel =
         peerCount === 0 ? 'No one nearby yet' :
@@ -275,6 +327,22 @@ const MeshStatusScreen: React.FC<Props> = ({ navigation, route }) => {
                 )}
 
             </ScrollView>
+
+            {/* ── Bluetooth-style connection popup ─────────────────────────── */}
+            {connPopup.visible && (
+                <Animated.View entering={FadeInDown.duration(280)} style={[s.connPopup, { borderColor: connPopup.color }]}>
+                    <View style={[s.connPopupDot, { backgroundColor: connPopup.color }]} />
+                    <Text style={s.connPopupIcon}>{connPopup.icon}</Text>
+                    <View style={{ flex: 1 }}>
+                        <Text style={[s.connPopupTitle, { color: connPopup.color }]}>{connPopup.title}</Text>
+                        <Text style={s.connPopupSub}>{connPopup.subtitle}</Text>
+                    </View>
+                    <TouchableOpacity onPress={() => setConnPopup(p => ({ ...p, visible: false }))} style={s.connPopupClose}>
+                        <Text style={{ fontSize: 16, color: C.muted }}>✕</Text>
+                    </TouchableOpacity>
+                </Animated.View>
+            )}
+
         </SafeAreaView>
     );
 };
@@ -365,6 +433,26 @@ const s = StyleSheet.create({
     },
     testBtnText: { fontSize: 14, fontWeight: '700', color: C.blue },
     testBtnSub: { fontSize: 11, color: C.muted, marginTop: 3 },
+
+    /* Bluetooth-style connection popup */
+    connPopup: {
+        position: 'absolute', bottom: 20, left: 14, right: 14,
+        backgroundColor: C.white,
+        borderWidth: 2, borderRadius: 18,
+        paddingVertical: 14, paddingHorizontal: 16,
+        flexDirection: 'row', alignItems: 'center', gap: 12,
+        elevation: 12,
+        shadowColor: '#000', shadowOffset: { width: 0, height: 5 },
+        shadowOpacity: 0.18, shadowRadius: 10,
+    },
+    connPopupDot: {
+        width: 8, height: 8, borderRadius: 4,
+        position: 'absolute', top: 12, left: 12,
+    },
+    connPopupIcon: { fontSize: 30 },
+    connPopupTitle: { fontSize: 14, fontWeight: '800', lineHeight: 19 },
+    connPopupSub:   { fontSize: 12, color: C.muted, marginTop: 1 },
+    connPopupClose: { padding: 4, marginLeft: 4 },
 });
 
 export default MeshStatusScreen;

@@ -41,6 +41,7 @@ import { contactsService, TrustedContact } from '../services/contacts';
 import { locationService } from '../services/location';
 import { locationTrailService } from '../services/locationTrailService';
 import { notificationService } from '../services/notificationService';
+import { permissionService } from '../services/permissionService';
 import { GovtAction, SOSRecord, sosService } from '../services/sos';
 import { soundService } from '../services/soundService';
 
@@ -273,32 +274,37 @@ const SOSScreen: React.FC<Props> = ({ navigation, route }) => {
         // Start location trail recording (battery-aware)
         locationTrailService.start();
 
-        // Init mesh networking (works silently — no crash if unavailable in Expo Go)
-        bleMeshService.init().then(ready => {
+        // Init mesh networking only after runtime permissions are granted
+        permissionService.enableMesh({
+            displayName: userName,
+            showEnabledAlert: false,
+            onPacket: (pkt) => {
+                console.log('[SOSScreen] Mesh packet received:', pkt.type, 'hops:', pkt.hops);
+                // Track unique peers by origin with timestamp
+                if (pkt.type === 'ping' && pkt.origin !== userId) {
+                    knownPeers.current.set(pkt.origin, Date.now());
+                    // Clean expired peers (2 min TTL)
+                    const now = Date.now();
+                    for (const [id, ts] of knownPeers.current) {
+                        if (now - ts > 120_000) knownPeers.current.delete(id);
+                    }
+                    setPeerCount(knownPeers.current.size);
+                }
+                // Alert user when a real SOS comes in from a nearby device
+                if (pkt.type === 'sos' && pkt.origin !== userId) {
+                    soundService.playSosAlert();
+                    notificationService.notifyNearbySOS({
+                        userName: (pkt.payload as any)?.userName ?? 'Someone',
+                        address: (pkt.payload as any)?.gps?.address,
+                        hops: pkt.hops,
+                    });
+                }
+            },
+        }).then(ready => {
             if (ready) {
                 console.log('[SOSScreen] Mesh ready ✅');
-                bleMeshService.startScanning((pkt) => {
-                    console.log('[SOSScreen] Mesh packet received:', pkt.type, 'hops:', pkt.hops);
-                    // Track unique peers by origin with timestamp
-                    if (pkt.type === 'ping' && pkt.origin !== userId) {
-                        knownPeers.current.set(pkt.origin, Date.now());
-                        // Clean expired peers (2 min TTL)
-                        const now = Date.now();
-                        for (const [id, ts] of knownPeers.current) {
-                            if (now - ts > 120_000) knownPeers.current.delete(id);
-                        }
-                        setPeerCount(knownPeers.current.size);
-                    }
-                    // Alert user when a real SOS comes in from a nearby device
-                    if (pkt.type === 'sos' && pkt.origin !== userId) {
-                        soundService.playSosAlert();
-                        notificationService.notifyNearbySOS({
-                            userName: (pkt.payload as any)?.userName ?? 'Someone',
-                            address: (pkt.payload as any)?.gps?.address,
-                            hops: pkt.hops,
-                        });
-                    }
-                });
+            } else {
+                console.warn('[SOSScreen] Mesh unavailable — permission denied or radios disabled');
             }
         });
 

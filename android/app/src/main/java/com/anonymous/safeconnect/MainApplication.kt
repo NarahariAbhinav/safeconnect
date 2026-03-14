@@ -13,7 +13,9 @@ import com.facebook.react.common.ReleaseLevel
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint
 import com.facebook.react.defaults.DefaultReactNativeHost
 
-import com.anonymous.safeconnect.gatt.GattServerPackage
+// GattServerPackage intentionally removed — it conflicts with Google Nearby Connections
+// for the BLE radio chip. Nearby Connections (expo-nearby-connections) is the sole
+// Bluetooth/WiFi-Direct mesh layer in SafeConnect.
 
 import expo.modules.ApplicationLifecycleDispatcher
 import expo.modules.ReactNativeHostWrapper
@@ -25,8 +27,7 @@ class MainApplication : Application(), ReactApplication {
       object : DefaultReactNativeHost(this) {
         override fun getPackages(): List<ReactPackage> =
             PackageList(this).packages.apply {
-              // Packages that cannot be autolinked yet can be added manually here, for example:
-              add(GattServerPackage())
+              // GattServerPackage removed — Nearby Connections is the sole mesh layer
             }
 
           override fun getJSMainModuleName(): String = ".expo/.virtual-metro-entry"

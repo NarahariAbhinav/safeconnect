@@ -27,7 +27,6 @@ import ResourceOfferScreen from './src/screens/ResourceOfferScreen';
 import SignupScreen from './src/screens/SignupScreen';
 import SOSScreen from './src/screens/SOSScreen';
 import WelcomeScreen from './src/screens/WelcomeScreen';
-import { bleMeshService } from './src/services/ble/BLEMeshService';
 import { notificationService } from './src/services/notificationService';
 import { soundService } from './src/services/soundService';
 
@@ -211,19 +210,6 @@ const App = () => {
     // ── Init services on app startup ──
     notificationService.init();
     soundService.init();
-    
-    // ── Init BLE Mesh (non-blocking) ──
-    // This initializes the Bluetooth adapter but doesn't start scanning yet
-    // Scanning will be started from HomeScreen after permissions are granted
-    bleMeshService.init().then(ready => {
-      if (ready) {
-        console.log('[App] BLE Mesh initialized successfully');
-      } else {
-        console.warn('[App] BLE Mesh could not initialize - Bluetooth might be disabled or permissions not granted');
-      }
-    }).catch(err => {
-      console.error('[App] BLE Mesh initialization error:', err);
-    });
   }, []);
 
   if (!isReady) {

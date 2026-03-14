@@ -66,6 +66,16 @@ class ChatServiceClass {
         return roomKey(myId, contactId);
     }
 
+    // ── Load messages for an arbitrary roomId (e.g. mesh_broadcast) ──
+    async getMessagesByRoomId(roomId: string): Promise<ChatMessage[]> {
+        return this._getLocalMessages(roomId);
+    }
+
+    // ── Save a message directly to a known roomId ──────────────────
+    async saveMessageToRoom(roomId: string, msg: ChatMessage): Promise<void> {
+        await this._saveMessageLocally(roomId, msg);
+    }
+
     // ── Send a message ──────────────────────────────────────────────
     async sendMessage(
         myId: string,

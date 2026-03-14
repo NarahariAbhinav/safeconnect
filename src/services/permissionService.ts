@@ -5,12 +5,18 @@
 
 import { Alert, Linking, PermissionsAndroid, Platform } from 'react-native';
 import { bleBackgroundRelayService } from './ble/BLEBackgroundRelayService';
-import { bleMeshService } from './ble/BLEMeshService';
+import { bleMeshService, MeshPacket } from './ble/BLEMeshService';
 
 interface PermissionStatus {
     bluetooth: boolean;
     location: boolean;
     nearbyWifi: boolean;
+}
+
+interface MeshEnableOptions {
+    displayName?: string;
+    onPacket?: (pkt: MeshPacket) => void;
+    showEnabledAlert?: boolean;
 }
 
 class PermissionService {
@@ -68,7 +74,7 @@ class PermissionService {
     /**
      * Start mesh networking after permissions are verified
      */
-    async enableMesh(): Promise<boolean> {
+    async enableMesh(options: MeshEnableOptions = {}): Promise<boolean> {
         // First, request permissions
         const perms = await this.requestAllPermissions();
 
@@ -90,7 +96,7 @@ class PermissionService {
         }
 
         // Initialize mesh networking (starts advertise + discover)
-        const ready = await bleMeshService.init();
+    const ready = await bleMeshService.init(options.displayName);
 
         if (!ready) {
             Alert.alert(
@@ -107,17 +113,19 @@ class PermissionService {
 
         // All good - start scanning for peers
         console.log('[PermissionService] Starting mesh with permission check passed');
-        bleMeshService.startScanning();
+        await bleMeshService.startScanning(options.onPacket);
 
         // Also start background relay for offline messages
         await bleBackgroundRelayService.startRelay();
 
-        Alert.alert(
-            '✅ SafeConnect Mesh Enabled',
-            'Your device is now broadcasting and scanning for nearby SafeConnect users.\n\n' +
-            '📍 SOS alerts and messages can be shared via mesh even without internet!\n\n' +
-            '💡 Keep Bluetooth and Wi-Fi ON for best results.'
-        );
+        if (options.showEnabledAlert !== false) {
+            Alert.alert(
+                '✅ SafeConnect Mesh Enabled',
+                'Your device is now broadcasting and scanning for nearby SafeConnect users.\n\n' +
+                '📍 SOS alerts and messages can be shared via mesh even without internet!\n\n' +
+                '💡 Keep Bluetooth and Wi-Fi ON for best results.'
+            );
+        }
 
         return true;
     }
@@ -133,6 +141,7 @@ class PermissionService {
      * Stop mesh networking
      */
     disableMesh(): void {
+        bleBackgroundRelayService.stopRelay();
         bleMeshService.destroy();
     }
 
