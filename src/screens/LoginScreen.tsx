@@ -122,7 +122,9 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
         id: `guest_${Date.now()}`,
         firstName: quickName.trim().split(' ')[0],
         lastName: quickName.trim().split(' ').slice(1).join(' ') || '',
-        phone: quickPhone.trim() || 'Not provided',
+        // Store only digits so normalizePhone10() works for private mesh chat.
+        // Empty string is handled gracefully; 'Not provided' was breaking it.
+        phone: quickPhone.trim().replace(/\D/g, '') || '',
         email: '',
         isGuest: true,
         createdAt: new Date().toISOString(),
@@ -374,10 +376,10 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
             />
 
             {/* Phone input */}
-            <Text style={styles.modalLabel}>PHONE NUMBER (optional)</Text>
+            <Text style={styles.modalLabel}>PHONE NUMBER (for Private Mesh Chat)</Text>
             <TextInput
               style={styles.modalInput}
-              placeholder="For SMS alerts to contacts"
+              placeholder="e.g. 9876543210 — enables private chat"
               placeholderTextColor={COLORS.muted}
               value={quickPhone}
               onChangeText={setQuickPhone}

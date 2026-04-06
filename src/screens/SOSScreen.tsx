@@ -293,11 +293,16 @@ const SOSScreen: React.FC<Props> = ({ navigation, route }) => {
                 // Alert user when a real SOS comes in from a nearby device
                 if (pkt.type === 'sos' && pkt.origin !== userId) {
                     soundService.playSosAlert();
-                    notificationService.notifyNearbySOS({
-                        userName: (pkt.payload as any)?.userName ?? 'Someone',
-                        address: (pkt.payload as any)?.gps?.address,
-                        hops: pkt.hops,
-                    });
+                    try {
+                        const sosData = typeof pkt.payload === 'string' ? JSON.parse(pkt.payload) : pkt.payload;
+                        notificationService.notifyNearbySOS({
+                            userName: sosData?.userName ?? 'Someone',
+                            address: sosData?.gps?.address,
+                            hops: pkt.hops,
+                        });
+                    } catch {
+                        notificationService.notifyNearbySOS({ userName: 'Someone', hops: pkt.hops });
+                    }
                 }
             },
         }).then(ready => {

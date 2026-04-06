@@ -1,7 +1,10 @@
 ﻿// SafeConnect Dashboard - Clean Rewrite
+// NOTE: Must be served via http:// (not file://) for Firebase to work.
+// Run: npx serve . OR python -m http.server 8080
 var FB = 'https://safeconnect-f509c-default-rtdb.asia-southeast1.firebasedatabase.app';
-var map, D = {}, ML = { sos: [], needs: [], help: [], camps: [], teams: [], dist: [], trails: [] };
+var map, D = {}, ML = { sos: [], needs: [], help: [], camps: [], teams: [], dist: [], trails: [], heat: null };
 var prev = new Set(), cZ = 'all', cD = '', lr = Date.now(), WM = 30 * 60 * 1000;
+var heatOn = false, heatLayer = null;
 
 // === Clock ===
 function tick() { var n = new Date(); $('clk').textContent = n.toLocaleTimeString('en-IN', { hour12: false }); $('clkd').textContent = n.toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase(); }
@@ -15,7 +18,13 @@ function sos_beep() { beep(880, .2, .5); setTimeout(function () { beep(880, .2, 
 // === Map ===
 function initMap() { map = L.map('map', { zoomControl: false, attributionControl: false }).setView([17.75, 79.5], 7); L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', { subdomains: 'abcd', maxZoom: 19 }).addTo(map); L.control.zoom({ position: 'bottomright' }).addTo(map); }
 function ic(e, c, s) { s = s || 30; return L.divIcon({ className: '', html: '<div style="width:' + s + 'px;height:' + s + 'px;border-radius:50%;background:' + c + ';display:flex;align-items:center;justify-content:center;font-size:' + Math.round(s * .4) + 'px;border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,.2)">' + e + '</div>', iconSize: [s, s], iconAnchor: [s / 2, s / 2] }); }
-function clr() { Object.values(ML).forEach(function (a) { a.forEach(function (m) { map.removeLayer(m); }); a.length = 0; }); }
+function clr() {
+    Object.keys(ML).forEach(function (k) {
+        if (!Array.isArray(ML[k])) return;
+        ML[k].forEach(function (m) { map.removeLayer(m); });
+        ML[k].length = 0;
+    });
+}
 
 // === Helpers ===
 function $(id) { return document.getElementById(id); }
@@ -29,18 +38,86 @@ function rw(l, v) { return '<div class="mr"><div class="ml">' + l + '</div><div 
 function cm() { $('mbg').className = 'mbg'; }
 function toast(t, b, c) { var z = $('tz'), el = document.createElement('div'); el.className = 'toast'; el.style.borderLeftColor = c || '#C62828'; el.innerHTML = '<div class="toast-t" style="color:' + (c || '#C62828') + '">' + t + '</div><div class="toast-b">' + b + '</div>'; z.appendChild(el); setTimeout(function () { el.remove(); }, 6000); }
 
-// === Fetch ===
-async function get(p) { try { var r = await fetch(FB + '/' + p + '.json'); return (await r.json()) || {}; } catch (e) { return {}; } }
+// === Fetch with diagnostics ===
+var _fetchErr = false;
+var _hasRendered = false; // true once data has been displayed at least once
+async function get(p) {
+    try {
+        var r = await fetch(FB + '/' + p + '.json', { cache: 'no-cache', mode: 'cors' });
+        if (!r.ok) { console.error('[SC] Firebase HTTP ' + r.status + ' for /' + p); return {}; }
+        var data = await r.json();
+        _fetchErr = false;
+        return data || {};
+    } catch (e) {
+        console.error('[SC] Fetch failed for /' + p + ':', e.message);
+        _fetchErr = true;
+        return {};
+    }
+}
 
 // === Load ===
 async function load() {
-    var [soss, needss, resources, camps, teams, dists] = await Promise.all([get('soss'), get('needss'), get('resources'), get('relief_camps'), get('govt_rescue_teams'), get('govt_districts')]);
-    D = { soss: soss, needss: needss, resources: resources, camps: camps, teams: teams, dists: dists };
-    // Detect new SOS
-    var ck = new Set(Object.keys(soss || {}));
-    if (prev.size > 0) ck.forEach(function (k) { if (!prev.has(k)) { var s = soss[k]; toast('&#128680; NEW SOS: ' + (s.userName || 'Unknown'), s.gps && s.gps.address ? s.gps.address : 'Location captured', '#C62828'); sos_beep(); } });
-    prev = ck;
-    render(); fillDD(); lr = Date.now();
+    try {
+        var [soss, needss, resources, camps, teams, dists] = await Promise.all([
+            get('soss'), get('needss'), get('resources'),
+            get('relief_camps'), get('govt_rescue_teams'), get('govt_districts')
+        ]);
+        D = { soss: soss, needss: needss, resources: resources, camps: camps, teams: teams, dists: dists };
+
+        if (_fetchErr) {
+            // Network error on this cycle
+            $('con-dot').style.background = '#DC2626';
+            $('con-lbl').textContent = 'Offline';
+            if (!_hasRendered) {
+                showConnError(); // First load failed — show error in panels
+                return;
+            } else {
+                toast('⚠️ Connection issue', 'Showing last known data', '#D97706');
+                // Don't return — fall through and render with whatever data we have
+            }
+        } else {
+            $('con-dot').style.background = 'var(--green)';
+            $('con-lbl').textContent = 'LIVE';
+        }
+
+        // Detect new SOS
+        var ck = new Set(Object.keys(soss || {}));
+        if (prev.size > 0) ck.forEach(function (k) {
+            if (!prev.has(k)) {
+                var s = soss[k];
+                toast('&#128680; NEW SOS: ' + (s.userName || 'Unknown'),
+                    s.gps && s.gps.address ? s.gps.address : 'Location captured', '#DC2626');
+                sos_beep();
+            }
+        });
+        prev = ck;
+        render(); fillDD(); lr = Date.now();
+        _hasRendered = true;
+        checkCampBanner();
+    } catch (e) {
+        console.error('[SC] load() error:', e);
+        if (!_hasRendered) showConnError();
+        else toast('⚠️ Refresh error', e.message, '#DC2626');
+    }
+}
+
+function showConnError() {
+    var isFileProto = location.protocol === 'file:';
+    var msg = '<div class="emp" style="padding:30px 16px">' +
+        '<div class="emp-i">' + (isFileProto ? '&#128196;' : '&#128268;') + '</div>' +
+        '<div class="emp-t" style="color:#DC2626">' + (isFileProto ? 'Open via HTTP server' : 'Cannot connect to Firebase') + '</div>' +
+        '<div class="emp-b">' + (isFileProto ?
+            'This dashboard cannot fetch data when opened as a <b>file://</b>.<br><br>' +
+            '&#128073; Run this in your terminal:<br><br>' +
+            '<code style="background:#1A1A2E;color:#6EE7B7;padding:8px 12px;border-radius:8px;font-size:11px;display:block;margin-top:6px">npx serve .</code><br>' +
+            'Then open <b>http://localhost:3000</b>' :
+            'Check your internet connection.<br>The database may be temporarily unavailable.') +
+        '</div>' +
+        '<button onclick="load()" style="margin-top:14px;padding:9px 20px;background:#E05A2B;color:#fff;border:none;border-radius:9px;font-size:12px;font-weight:800;cursor:pointer;font-family:inherit">&#8635; Retry Now</button>' +
+        '</div>';
+    ['p-sos', 'p-needs', 'p-help', 'p-camps', 'p-teams'].forEach(function (id) {
+        var el = $(id); if (el) el.innerHTML = msg;
+    });
 }
 
 // === Render ===
@@ -91,9 +168,13 @@ function markers(sos, needs, help, camps, teams, dists) {
         var m = L.marker([r.gps.latitude, r.gps.longitude], { icon: ic('&#129309;', '#2A7A5A', 28) }).addTo(map).bindPopup('<div class="lpt" style="color:#2A7A5A">Helps: ' + (r.userName || '?') + '</div><div class="lpr">' + ((r.resources || []).join(', ') || '\u2014') + '</div>');
         ML.help.push(m);
     });
-    camps.filter(function (c) { return c.latitude; }).forEach(function (c) {
-        var pct = Math.round((c.currentOccupancy / c.capacity) * 100) || 0; var cl = pct > 90 ? '#C62828' : pct > 70 ? '#D84315' : '#1565C0';
-        var m = L.marker([c.latitude, c.longitude], { icon: ic('&#9978;', cl, 28) }).addTo(map).bindPopup('<div class="lpt" style="color:#1565C0">' + c.name + '</div><div class="lpr">' + c.currentOccupancy + '/' + c.capacity + '</div>');
+    camps.filter(function (c) { return (c.gps && c.gps.latitude) || c.latitude; }).forEach(function (c) {
+        var lat = (c.gps && c.gps.latitude) || c.latitude;
+        var lng = (c.gps && c.gps.longitude) || c.longitude;
+        var pct = Math.round((c.currentOccupancy / c.capacity) * 100) || 0;
+        var cl = pct > 90 ? '#C62828' : pct > 70 ? '#D84315' : '#1565C0';
+        var m = L.marker([lat, lng], { icon: ic('&#9978;', cl, 28) }).addTo(map)
+            .bindPopup('<div class="lpt" style="color:#1565C0">' + c.name + '</div><div class="lpr">' + c.currentOccupancy + '/' + c.capacity + ' (' + pct + '%)</div>');
         ML.camps.push(m);
     });
     teams.filter(function (t) { return t.lat; }).forEach(function (t) {
@@ -202,7 +283,7 @@ function pHelp(list) {
     var p = $('p-help');
     if (!list.length) { p.innerHTML = '<div class="emp"><div class="emp-i">&#129309;</div><div class="emp-t">No Help Offers</div><div class="emp-b">When someone taps "I Can Help", offers appear here.</div></div>'; return; }
     list.sort(function (a, b) { return (b.offeredAt || 0) - (a.offeredAt || 0); });
-    p.innerHTML = '<div class="ph">"I Can Help" &#8212; ' + list.length + '</div>' + list.map(function (r) {
+    p.innerHTML = '<div class="ph">Volunteers — ' + list.length + '</div>' + list.map(function (r) {
         var icons = (r.resources || []).map(function (k) { return RE[k] || '?'; }).join(' ');
         return '<div class="cd" onclick="fly(' + (r.gps && r.gps.latitude || 0) + ',' + (r.gps && r.gps.longitude || 0) + ')"><div class="cs" style="background:#2A7A5A"></div><div class="cr"><div class="ca" style="background:var(--green-lt);color:var(--green)">' + icons + '</div><div><div class="cn">' + (r.userName || 'Volunteer') + '</div><div class="csub">' + (r.gps && r.gps.address ? r.gps.address : 'GPS') + '</div></div></div><div class="cb">Offering: <b>' + ((r.resources || []).join(', ') || '\u2014') + '</b>' + (r.capacity ? '<br>Can help ' + r.capacity + ' people' : '') + (r.notes ? '<br>' + r.notes : '') + '</div><div class="cf"><span class="p pg">CAN HELP</span><span class="ts">' + ago(r.offeredAt) + '</span></div></div>';
     }).join('');
@@ -214,8 +295,13 @@ function pCamps(list) {
     if (!list.length) { p.innerHTML = '<div class="emp"><div class="emp-i">&#9978;</div><div class="emp-t">No Camps</div><div class="emp-b">No relief camps for this area.</div></div>'; return; }
     list.sort(function (a, b) { return (a.name || '').localeCompare(b.name || ''); });
     p.innerHTML = '<div class="ph">Relief Camps &#8212; ' + list.length + '</div>' + list.map(function (c) {
-        var pct = Math.round((c.currentOccupancy / c.capacity) * 100) || 0; var bc = pct > 90 ? '#C62828' : pct > 70 ? '#D84315' : '#2A7A5A'; var pc = pct > 90 ? 'pr' : pct > 70 ? 'pa' : 'pg'; var lb = pct > 90 ? 'Near Full' : pct > 70 ? 'Filling' : 'Available';
-        return '<div class="cd" onclick="fly(' + c.latitude + ',' + c.longitude + ')"><div class="cs" style="background:#1565C0"></div><div class="cr"><div class="ca" style="background:var(--blue-lt);color:var(--blue)">&#9978;</div><div><div class="cn" style="font-size:11px">' + c.name + '</div><div class="csub">' + c.district + ' &#183; ' + c.contactNumber + '</div></div></div><div class="cpw"><div class="cpb" style="width:' + pct + '%;background:' + bc + '"></div></div><div class="cpl">' + c.currentOccupancy + '/' + c.capacity + ' (' + pct + '%)</div><div class="rcs">' + (c.resources || []).map(function (r) { return '<span class="rc">' + r + '</span>'; }).join('') + '</div><div class="cf" style="margin-top:5px"><span class="p ' + pc + '">' + lb + '</span>' + (c.isGovtRegistered ? '<span class="p po">Govt</span>' : '') + '</div></div>';
+        var clat = (c.gps && c.gps.latitude) || c.latitude || 0;
+        var clng = (c.gps && c.gps.longitude) || c.longitude || 0;
+        var pct = Math.round((c.currentOccupancy / c.capacity) * 100) || 0;
+        var bc = pct > 90 ? '#C62828' : pct > 70 ? '#D84315' : '#2A7A5A';
+        var pc = pct > 90 ? 'pr' : pct > 70 ? 'pa' : 'pg';
+        var lb = pct > 90 ? 'Near Full' : pct > 70 ? 'Filling' : 'Available';
+        return '<div class="cd" onclick="fly(' + clat + ',' + clng + ')"><div class="cs" style="background:#1565C0"></div><div class="cr"><div class="ca" style="background:var(--blue-lt);color:var(--blue)">&#9978;</div><div><div class="cn" style="font-size:11px">' + c.name + '</div><div class="csub">' + c.district + ' &#183; ' + (c.contactNumber || '—') + '</div></div></div><div class="cpw"><div class="cpb" style="width:' + pct + '%;background:' + bc + '"></div></div><div class="cpl">' + c.currentOccupancy + '/' + c.capacity + ' (' + pct + '%)</div><div class="rcs">' + (c.resources || []).map(function (r) { return '<span class="rc">' + r + '</span>'; }).join('') + '</div><div class="cf" style="margin-top:5px"><span class="p ' + pc + '">' + lb + '</span>' + (c.isGovtRegistered ? '<span class="p po">Govt</span>' : '') + '</div></div>';
     }).join('');
 }
 
@@ -244,8 +330,236 @@ function pDists(list) {
     p.innerHTML = h;
 }
 
-// === Tab Switch ===
-function go(n) { ['sos', 'needs', 'help', 'camps', 'teams', 'districts'].forEach(function (t) { var tb = $('t-' + t), pn = $('p-' + t), st = $('s-' + t); if (tb) tb.className = 'tb' + (t === n ? ' on' : ''); if (pn) pn.className = 'pnl' + (t === n ? ' on' : ''); if (st) st.className = 'st' + (t === n ? ' on' : ''); }); }
+// === Tab Switch (updated to include new tabs) ===
+function go(n) {
+    var all = ['sos', 'needs', 'help', 'camps', 'teams', 'districts', 'match', 'sitrep', 'resp'];
+    all.forEach(function (t) {
+        var tb = $('t-' + t), pn = $('p-' + t), st = $('s-' + t);
+        if (tb) tb.className = 'tb' + (t === n ? ' on' : '');
+        if (pn) pn.className = 'pnl' + (t === n ? ' on' : '');
+        if (st) st.className = 'st' + (t === n ? ' on' : '');
+    });
+}
+
+// === Feature 1: Heatmap Toggle ===
+function togHeat() {
+    if (!heatOn) {
+        var pts = [];
+        ov(D.soss || {}).filter(function (s) { return s.isActive && s.gps && s.gps.latitude; }).forEach(function (s) {
+            pts.push([s.gps.latitude, s.gps.longitude, 1.0]);
+        });
+        ov(D.needss || {}).filter(function (n) { return n.gps && n.gps.latitude; }).forEach(function (n) {
+            pts.push([n.gps.latitude, n.gps.longitude, 0.5]);
+        });
+        if (pts.length === 0) { toast('No Data', 'No GPS points to show heatmap for.', '#1565C0'); return; }
+        heatLayer = L.heatLayer(pts, {
+            radius: 35, blur: 20, maxZoom: 12,
+            gradient: { 0.2: '#1565C0', 0.5: '#E65100', 0.8: '#C62828', 1.0: '#7B1FA2' }
+        }).addTo(map);
+        heatOn = true;
+        $('heat-btn').style.background = '#C62828';
+        $('heat-btn').style.color = '#fff';
+        $('heat-btn').style.borderColor = '#C62828';
+        toast('&#127754; Heatmap ON', 'Showing SOS + Needs density', '#C62828');
+    } else {
+        if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
+        heatOn = false;
+        $('heat-btn').style.background = '';
+        $('heat-btn').style.color = '';
+        $('heat-btn').style.borderColor = '';
+        toast('Heatmap OFF', 'Heatmap hidden', '#2A7A5A');
+    }
+}
+
+// === Feature 2: Camp Capacity Alert Banner ===
+function checkCampBanner() {
+    var nearFull = ov(D.camps || {}).filter(function (c) {
+        return c.isActive && c.capacity > 0 && (c.currentOccupancy / c.capacity) >= 0.80;
+    });
+    var banner = $('camp-banner');
+    if (!banner) return;
+    if (nearFull.length > 0) {
+        var names = nearFull.map(function (c) {
+            return c.name + ' (' + Math.round((c.currentOccupancy / c.capacity) * 100) + '%)';
+        }).join(' &#183; ');
+        $('camp-banner-txt').innerHTML = '&#9888; ' + nearFull.length + ' camp(s) near/at capacity: ' + names;
+        banner.classList.add('on');
+    } else {
+        banner.classList.remove('on');
+    }
+}
+
+// === Feature 3: Need-Volunteer Matcher ===
+function haversine(la1, lo1, la2, lo2) {
+    var R = 6371, dLat = (la2 - la1) * Math.PI / 180, dLon = (lo2 - lo1) * Math.PI / 180;
+    var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(la1 * Math.PI / 180) * Math.cos(la2 * Math.PI / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+function runMatch() {
+    var p = $('p-match'); if (!p) return;
+    var needs = ov(D.needss || {}).filter(function (n) { return n.gps && n.gps.latitude; });
+    var vols = ov(D.resources || {}).filter(function (r) { return r.gps && r.gps.latitude; });
+    if (!needs.length || !vols.length) {
+        p.innerHTML = '<div class="emp"><div class="emp-i">&#129309;</div><div class="emp-t">No matches yet</div><div class="emp-b">Needs &amp; Volunteer offers will be matched here automatically.</div></div>';
+        return;
+    }
+    var pairs = [];
+    needs.forEach(function (n) {
+        var nNeeds = n.needs || [];
+        var best = null, bestDist = Infinity;
+        vols.forEach(function (v) {
+            var vRes = v.resources || [];
+            var overlap = nNeeds.filter(function (k) { return vRes.indexOf(k) > -1; });
+            if (overlap.length === 0) return;
+            var d = haversine(n.gps.latitude, n.gps.longitude, v.gps.latitude, v.gps.longitude);
+            if (d < bestDist) { bestDist = d; best = { vol: v, overlap: overlap, dist: d }; }
+        });
+        if (best) pairs.push({ need: n, vol: best.vol, overlap: best.overlap, dist: best.dist });
+    });
+    pairs.sort(function (a, b) { return a.dist - b.dist; });
+    if (!pairs.length) {
+        p.innerHTML = '<div class="emp"><div class="emp-i">&#129309;</div><div class="emp-t">No resource overlap found</div><div class="emp-b">No volunteer offers match current needs categories.</div></div>';
+        return;
+    }
+    p.innerHTML = '<div class="ph">Best Matches &#8212; ' + pairs.length + '</div>' +
+        pairs.map(function (pr) {
+            var la = pr.need.gps.latitude, lo = pr.need.gps.longitude;
+            return '<div class="match-pair">' +
+                '<div class="mph">Matched on: ' + pr.overlap.join(', ') + '</div>' +
+                '<div class="match-row">' +
+                '<div class="match-side">' +
+                '<div class="match-name" style="color:#D84315">&#128203; ' + (pr.need.userName || 'Unknown') + '</div>' +
+                '<div class="match-detail">' + (pr.need.gps.address || 'GPS location') + '<br>Needs: ' + (pr.need.needs || []).join(', ') + '</div>' +
+                '</div>' +
+                '<div class="match-arrow">&#8594;</div>' +
+                '<div class="match-side">' +
+                '<div class="match-name" style="color:#2A7A5A">&#129309; ' + (pr.vol.userName || 'Volunteer') + '</div>' +
+                '<div class="match-detail">' + (pr.vol.gps.address || 'GPS location') + '<br>Offers: ' + (pr.vol.resources || []).join(', ') + '</div>' +
+                '</div>' +
+                '</div>' +
+                '<div class="match-dist">&#128205; ' + pr.dist.toFixed(1) + ' km apart</div>' +
+                '<button class="match-btn" onclick="fly(' + la + ',' + lo + ')">&#128506; Show on Map</button>' +
+                '</div>';
+        }).join('');
+}
+
+// === Feature 4: SITREP Auto-Generator ===
+function genSITREP() {
+    var el = $('sitrep-out'); if (!el) return;
+    var now = new Date();
+    var sl = ov(D.soss || {}).filter(function (s) { return s.isActive; });
+    var nl = ov(D.needss || {});
+    var vl = ov(D.resources || {});
+    var cl = ov(D.camps || {}).filter(function (c) { return c.isActive; });
+    var tl = ov(D.teams || {});
+    var totalCap = cl.reduce(function (s, c) { return s + (c.capacity || 0); }, 0);
+    var totalOcc = cl.reduce(function (s, c) { return s + (c.currentOccupancy || 0); }, 0);
+    var critCamps = cl.filter(function (c) { return c.capacity > 0 && (c.currentOccupancy / c.capacity) >= 0.90; });
+    var oldSOS = sl.filter(function (s) { return Date.now() - s.activatedAt > WM; });
+    var lines = [
+        '╔════════════════════════════════════════════════════════╗',
+        '  SITUATION REPORT (SITREP) — SAFECONNECT PLATFORM',
+        '  Generated: ' + now.toLocaleString('en-IN'),
+        '  Zone: ' + (cZ === 'all' ? 'All Zones' : cZ) + (cD ? ' | District: ' + cD : ''),
+        '╚════════════════════════════════════════════════════════╝',
+        '',
+        '━━ ACTIVE INCIDENTS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+        '  Active SOS Alerts    : ' + sl.length,
+        '  Unresponded (>30min) : ' + oldSOS.length + (oldSOS.length ? ' ⚠️' : ''),
+        '  Needs Reports        : ' + nl.length,
+        '  Volunteer Offers     : ' + vl.length,
+        '',
+        '━━ RELIEF INFRASTRUCTURE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+        '  Active Camps         : ' + cl.length,
+        '  Total Capacity       : ' + totalCap,
+        '  Current Occupancy    : ' + totalOcc + ' (' + (totalCap ? Math.round(totalOcc / totalCap * 100) : 0) + '%)',
+        '  Near-Full Camps (≥90%): ' + critCamps.length + (critCamps.length ? ' ⚠️' : ''),
+        '  Rescue Teams On-Site : ' + tl.length,
+        '',
+    ];
+    if (sl.length > 0) {
+        lines.push('━━ CRITICAL SOS CASES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        sl.slice(0, 5).forEach(function (s, i) {
+            var age = Math.floor((Date.now() - s.activatedAt) / 60000);
+            var rsp = s.govtAction && s.govtAction.status ? '✓ ' + s.govtAction.status.replace(/_/g, ' ') : '✗ No response';
+            lines.push('  ' + (i + 1) + '. ' + (s.userName || 'Unknown') + ' — ' + (s.gps && s.gps.address ? s.gps.address : 'GPS captured'));
+            lines.push('     Age: ' + age + 'min | Response: ' + rsp + (s.viaBleMesh ? ' | Via BLE Mesh' : ''));
+        });
+        if (sl.length > 5) lines.push('  ... and ' + (sl.length - 5) + ' more active SOS');
+        lines.push('');
+    }
+    if (critCamps.length > 0) {
+        lines.push('━━ CAMP CAPACITY WARNINGS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        critCamps.forEach(function (c) {
+            lines.push('  ⚠️  ' + c.name + ' — ' + c.currentOccupancy + '/' + c.capacity + ' (' + Math.round(c.currentOccupancy / c.capacity * 100) + '%) — ' + c.district);
+        });
+        lines.push('');
+    }
+    lines.push('━━ ACTION REQUIRED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    if (oldSOS.length > 0) lines.push('  [URGENT] ' + oldSOS.length + ' SOS alert(s) unresponded for >30 minutes');
+    if (critCamps.length > 0) lines.push('  [URGENT] Redirect incoming survivors from full camps');
+    if (sl.length === 0 && nl.length === 0) lines.push('  [STATUS] All clear — no active emergencies');
+    lines.push('');
+    lines.push('— End of SITREP — Generated by SafeConnect Dashboard — TSDMA —');
+    el.textContent = lines.join('\n');
+}
+function copySITREP() {
+    var el = $('sitrep-out');
+    if (!el) return;
+    navigator.clipboard.writeText(el.textContent).then(function () {
+        toast('&#10004; Copied', 'SITREP copied to clipboard', '#2A7A5A');
+    }).catch(function () { toast('Error', 'Could not copy. Select text manually.', '#C62828'); });
+}
+function printSITREP() {
+    var el = $('sitrep-out');
+    if (!el) return;
+    var w = window.open('', '_blank');
+    w.document.write('<pre style="font-family:Courier New,monospace;font-size:12px;padding:20px;white-space:pre-wrap">' + el.textContent + '</pre>');
+    w.document.close(); w.print();
+}
+
+// === Feature 5: Response Time Leaderboard ===
+function renderResp() {
+    var p = $('p-resp'); if (!p) return;
+    var all = ov(D.soss || {});
+    if (!all.length) { p.innerHTML = '<div class="emp"><div class="emp-i">&#9201;</div><div class="emp-t">No SOS data yet</div></div>'; return; }
+    var byDist = {};
+    all.forEach(function (s) {
+        var d = s.district || s.gps && s.gps.address && s.gps.address.split(',').pop().trim() || 'Unknown';
+        if (!byDist[d]) byDist[d] = { total: 0, responded: 0, respTimes: [], handled: 0 };
+        byDist[d].total++;
+        if (s.govtAction && s.govtAction.dispatchedAt && s.activatedAt) {
+            var rt = (s.govtAction.dispatchedAt - s.activatedAt) / 60000;
+            if (rt > 0 && rt < 1440) { byDist[d].respTimes.push(rt); byDist[d].responded++; }
+        }
+        if (!s.isActive) byDist[d].handled++;
+    });
+    var rows = Object.keys(byDist).map(function (d) {
+        var r = byDist[d];
+        var avg = r.respTimes.length ? (r.respTimes.reduce(function (a, b) { return a + b; }, 0) / r.respTimes.length) : null;
+        return { dist: d, avg: avg, handled: r.handled, total: r.total, responded: r.responded };
+    }).sort(function (a, b) {
+        if (a.avg === null && b.avg === null) return 0;
+        if (a.avg === null) return 1;
+        if (b.avg === null) return -1;
+        return a.avg - b.avg;
+    });
+    var rankColors = ['#FFD700', '#C0C0C0', '#CD7F32'];
+    var html = '<div class="ph">Response Time by District (fastest first)</div>' +
+        '<table class="rt-table"><thead><tr><th>#</th><th>District</th><th>Avg Response</th><th>Handled</th><th>Total SOS</th></tr></thead><tbody>';
+    rows.forEach(function (r, i) {
+        var rc = rankColors[i] || '#8C7060';
+        html += '<tr>' +
+            '<td><span class="rt-rank" style="background:' + rc + '">' + (i + 1) + '</span></td>' +
+            '<td style="font-weight:700">' + r.dist + '</td>' +
+            '<td style="font-weight:700;color:' + (r.avg ? '#2A7A5A' : '#8C7060') + '">' + (r.avg ? r.avg.toFixed(0) + ' min' : '—') + '</td>' +
+            '<td><span class="p pg">' + r.handled + '</span></td>' +
+            '<td>' + r.total + '</td>' +
+            '</tr>';
+    });
+    html += '</tbody></table><div style="font-size:9px;color:var(--muted);margin-top:8px">&#9432; Response time = SOS activated → first govt dispatch. Lower is better.</div>';
+    p.innerHTML = html;
+}
 
 // === Export CSV ===
 function xport() {

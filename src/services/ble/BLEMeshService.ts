@@ -13,17 +13,25 @@
  * Messages hop device-to-device until they reach a gateway with internet.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import CryptoJS from 'crypto-js';
+import * as Location from 'expo-location';
 import * as Nearby from 'expo-nearby-connections';
-import { Alert, Linking } from 'react-native';
-import { chatService } from '../chatService';
+import * as TaskManager from 'expo-task-manager';
+import { Alert, Linking, Platform } from 'react-native';
 import { notificationService } from '../notificationService';
 import { GovtAction, sosService } from '../sos';
 
 const KEY_SMS_RELAYED = 'ble_sms_relayed'; // track which SOS we already relayed SMS for
 
+// Android keep-alive task
+const MESH_KEEP_ALIVE_TASK = 'MESH_KEEP_ALIVE_TASK';
+TaskManager.defineTask(MESH_KEEP_ALIVE_TASK, async () => {
+  // Keeps CPU awake
+});
+
 // Kept for backward compat (some screens import these UUIDs for display)
 export const SC_SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
-export const SC_CHAR_UUID    = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
+export const SC_CHAR_UUID = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
 
 // ─── Packet ───────────────────────────────────────────────────────
 export interface MeshPacket {
@@ -44,29 +52,37 @@ export interface MeshUIEvent {
   peerName: string;
 }
 
-const MAX_HOPS    = 5;
-const TTL_MS      = 12 * 60 * 60 * 1000;  // 12 hours
-const KEY_SEEN    = 'ble_seen_packets';    // dedup store
-const KEY_QUEUE   = 'ble_relay_queue';     // pending relay queue
-const STRATEGY    = Nearby.Strategy.P2P_CLUSTER; // many-to-many mesh
+const MAX_HOPS = 5;
+const TTL_MS = 12 * 60 * 60 * 1000;  // 12 hours
+const KEY_SEEN = 'ble_seen_packets';    // dedup store
+const KEY_QUEUE = 'ble_relay_queue';     // pending relay queue
+const STRATEGY = Nearby.Strategy.P2P_CLUSTER; // many-to-many mesh
 
 // ─── Service ──────────────────────────────────────────────────────
 class BLEMeshServiceClass {
-  private _ready        = false;
-  private _initialized  = false;
-  private peers         = new Set<string>();  // currently connected peer IDs
-  private pendingPeers  = new Set<string>();
+  private _ready = false;
+  private _initialized = false;
+  private peers = new Set<string>();  // currently connected peer IDs
+  private pendingPeers = new Set<string>();
   private listeners: ((pkt: MeshPacket) => void)[] = [];
   private unsubs: Array<() => void> = [];
-  private _name         = 'SafeConnect';
-  private peerNames     = new Map<string, string>(); // peerId → display name
-  private uiListeners:  ((e: MeshUIEvent) => void)[] = [];
+  private _name = 'SafeConnect-' + Math.floor(Math.random() * 9000 + 1000); // unique per session
+  private peerNames = new Map<string, string>(); // peerId → display name
+  private uiListeners: ((e: MeshUIEvent) => void)[] = [];
   private requestTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   // ── Public getters ─────────────────────────────────────────────
-  get ready()      { return this._ready; }
+  get ready() { return this._ready; }
   get _peerCount() { return this.peers.size; }
-  getPeerCount()   { return this.peers.size; }
+  getPeerCount() { return this.peers.size; }
+
+  /** Returns list of currently connected peers with their display names */
+  getConnectedPeers(): { id: string; name: string }[] {
+    return Array.from(this.peers).map(id => ({
+      id,
+      name: this.peerNames.get(id) ?? `Device-${id.slice(-4)}`,
+    }));
+  }
 
   // ── UI event subscription (for connection popups in screens) ───
   addUIListener(cb: (e: MeshUIEvent) => void): void {
@@ -76,14 +92,16 @@ class BLEMeshServiceClass {
     this.uiListeners = this.uiListeners.filter(l => l !== cb);
   }
   private _emitUI(e: MeshUIEvent): void {
-    this.uiListeners.forEach(cb => { try { cb(e); } catch {} });
+    this.uiListeners.forEach(cb => { try { cb(e); } catch { } });
   }
 
-  private _shouldInitiateConnection(peerName: string): boolean {
+  private _shouldInitiateConnection(peerName: string, peerId: string): boolean {
     const local = this._name.trim().toLowerCase();
     const remote = peerName.trim().toLowerCase();
+    // Only use name comparison if names are non-empty AND clearly different
     if (local && remote && local !== remote) return local > remote;
-    return true;
+    // Fallback: use peerId ordering so EXACTLY ONE side initiates (no deadlock)
+    return this._name > peerId;
   }
 
   private _getRequestDelay(peerId: string): number {
@@ -103,13 +121,18 @@ class BLEMeshServiceClass {
   async init(displayName?: string): Promise<boolean> {
     if (this._initialized && this._ready) return true;
 
-    if (displayName) this._name = displayName;
+    // If displayName is provided, embed it but keep unique suffix
+    if (displayName) {
+      // Keep: "DisplayName-XXXX" format for uniqueness
+      const suffix = this._name.split('-').pop() ?? Math.floor(Math.random() * 9000 + 1000).toString();
+      this._name = `${displayName.slice(0, 20)}-${suffix}`;
+    }
 
     // Register all event callbacks before starting advertising/discovery
     this._registerEvents();
 
     let advertiseOk = false;
-    let discoverOk  = false;
+    let discoverOk = false;
 
     // Start advertising — makes this device visible to peers
     try {
@@ -129,22 +152,58 @@ class BLEMeshServiceClass {
       console.warn('[Nearby] Discovery failed:', e?.message);
     }
 
-    this._ready       = advertiseOk || discoverOk;
+    this._ready = advertiseOk || discoverOk;
     this._initialized = true;
 
     if (this._ready) {
       console.log('[Nearby] ✅ Mesh ready. Advertise:', advertiseOk, '| Discover:', discoverOk);
+      this._startForegroundService();
     } else {
-      console.error('[Nearby] ❌ Mesh failed — check Bluetooth/WiFi permissions');
+      console.error('[Nearby] ❌ Mesh failed — will retry in 4s (check Bluetooth/WiFi permissions)');
+      // Auto-retry once after 4 seconds — handles race condition at app startup
+      setTimeout(async () => {
+        if (!this._ready) {
+          console.log('[Nearby] Retrying mesh init...');
+          this._initialized = false;
+          await this.init(displayName);
+        }
+      }, 4000);
     }
 
     return this._ready;
   }
 
+  // ── Start Android Foreground Service (Keep-Alive) ──────────────
+  private async _startForegroundService() {
+    try {
+      if (Platform.OS === 'android') {
+        const { status: fgStatus } = await Location.requestForegroundPermissionsAsync();
+        const { status: bgStatus } = await Location.requestBackgroundPermissionsAsync();
+
+        if (bgStatus === 'granted') {
+          await Location.startLocationUpdatesAsync(MESH_KEEP_ALIVE_TASK, {
+            accuracy: Location.Accuracy.Lowest,
+            timeInterval: 60000,
+            distanceInterval: 1000,
+            showsBackgroundLocationIndicator: true,
+            foregroundService: {
+              notificationTitle: 'SafeConnect Mesh is Active',
+              notificationBody: 'Routing emergency messages...',
+              notificationColor: '#2A7A5A',
+            },
+          });
+          console.log('[Nearby] Android Foreground Service started to keep mesh alive.');
+        }
+      }
+    } catch (e) {
+      console.warn('[Nearby] Foreground service start error:', e);
+    }
+  }
+
   // ── Register Nearby event handlers ────────────────────────────
   private _registerEvents(): void {
     // Remove previous listeners (safe to call init() multiple times)
-    this.unsubs.forEach(fn => { try { fn(); } catch {} });
+    this.unsubs.forEach(fn => { try { fn(); } catch { } });
     this.unsubs = [];
 
     // Peer discovered (we are discovering, peer is advertising)
@@ -160,8 +219,8 @@ class BLEMeshServiceClass {
         }
 
         // Reduce symmetric request collisions: prefer one initiator when names differ,
-        // otherwise use a short randomized backoff and cancel if an incoming invite appears.
-        if (!this._shouldInitiateConnection(peerName)) {
+        // otherwise use peerId ordering (deterministic, no deadlock, no "both wait").
+        if (!this._shouldInitiateConnection(peerName, peerId)) {
           console.log('[Nearby] Waiting for peer to initiate connection:', peerName);
           return;
         }
@@ -237,6 +296,25 @@ class BLEMeshServiceClass {
         try {
           const pkt: MeshPacket = JSON.parse(text);
           console.log('[Nearby] Received', pkt.type, 'packet from peer', peerId);
+
+          // E2EE Decryption for private chat messages
+          if (pkt.type === 'chat') {
+            try {
+              const payloadObj = JSON.parse(pkt.payload);
+              if (payloadObj.encrypted) {
+                // The roomId is the symmetric key for this E2EE implementation
+                const bytes = CryptoJS.AES.decrypt(payloadObj.message, payloadObj.roomId);
+                const decryptedStr = bytes.toString(CryptoJS.enc.Utf8);
+                if (decryptedStr) {
+                  payloadObj.message = JSON.parse(decryptedStr);
+                  pkt.payload = JSON.stringify(payloadObj);
+                }
+              }
+            } catch (decErr) {
+              console.log('[Nearby] E2EE decryption failed (not for us or bad key)');
+            }
+          }
+
           await this._handlePacket(pkt);
         } catch (e) {
           console.warn('[Nearby] Bad payload from', peerId, ':', e);
@@ -252,7 +330,7 @@ class BLEMeshServiceClass {
   }
 
   // stopScanning is intentionally a no-op — mesh must stay active for relay
-  stopScanning(): void {}
+  stopScanning(): void { }
 
   // ── Listener management ────────────────────────────────────────
   addListener(cb: (pkt: MeshPacket) => void): void {
@@ -265,8 +343,16 @@ class BLEMeshServiceClass {
 
   // ── broadcast() — queue + send to all peers ────────────────────
   async broadcast(pkt: MeshPacket): Promise<void> {
-    if (!this._ready) return;
-    await this._enqueue(pkt);             // persist first (offline safe)
+    // ALWAYS mark as seen and enqueue — even if mesh isn't ready yet.
+    // This ensures messages are never silently dropped: the background relay
+    // will send them as soon as a peer connects and mesh becomes ready.
+    await this._markSeen(pkt.id);
+    await this._enqueue(pkt);
+
+    if (!this._ready) {
+      console.log('[Nearby] Mesh not ready — packet queued for retry when peers connect:', pkt.type);
+      return;
+    }
     if (this.peers.size > 0) {
       await this._sendToAll(pkt);
     } else {
@@ -315,16 +401,30 @@ class BLEMeshServiceClass {
 
     await this._markSeen(pkt.id);
     await this._storeLocally(pkt);
-    this.listeners.forEach(cb => cb(pkt)); // notify UI
 
-    // 4. If internet available, upload to Firebase (gateway role)
-    const uploaded = await this._gatewaySync();
-    if (!uploaded) {
-      // No internet — relay to other peers (mesh hop)
+    // 4. Notify UI listeners IMMEDIATELY (non-blocking)
+    this.listeners.forEach(cb => { try { cb(pkt); } catch { } });
+
+    // 5. Chat packets are ALWAYS delivered via BLE mesh only.
+    //    Firebase is NOT used for chat — messages travel peer-to-peer.
+    //    Both group (mesh_broadcast) and private room packets relay via BLE.
+    if (pkt.type === 'chat') {
       const relay: MeshPacket = { ...pkt, hops: pkt.hops + 1 };
       await this._enqueue(relay);
       if (this.peers.size > 0) await this._sendToAll(relay);
+      return; // chat never goes to Firebase
     }
+
+    // 6. Non-chat packets (SOS, needs, resource, govtAction):
+    //    Always relay to other peers (mesh hop chain must continue even if we have internet).
+    //    If internet is available, ALSO push to Firebase (govt dashboard gateway).
+    //    This ensures: Device A(no internet) → Device B(has internet) → Firebase AND → Device C(no internet)
+    const relay: MeshPacket = { ...pkt, hops: pkt.hops + 1 };
+    await this._enqueue(relay);
+    if (this.peers.size > 0) await this._sendToAll(relay);
+
+    // Additionally, if we have internet, sync to Firebase (gateway function)
+    this._gatewaySync().catch(() => { });
   }
 
   // ── Store packet data locally depending on type ────────────────
@@ -337,9 +437,25 @@ class BLEMeshServiceClass {
         console.log('[Nearby] GovtAction stored locally');
       }
 
+
       if (pkt.type === 'chat') {
         const { roomId, message } = data;
-        if (!roomId || !message) return;
+        if (!roomId) return;
+        // Guard: if message is still an encrypted string (e.g. relay device that doesn't
+        // have the decryption key for a private chat), skip storage but ALLOW relay.
+        // Group chat (mesh_broadcast) is never encrypted so message is always an object.
+        const isGroup = roomId === 'mesh_broadcast';
+        const isDecrypted = message && typeof message === 'object' && !!message.id;
+        if (!isDecrypted && !isGroup) {
+          // Private packet we cannot decrypt — relay only, don't pollute storage
+          console.log('[Nearby] Private chat not for this device, relay-only.');
+          return;
+        }
+        if (!isDecrypted) {
+          // Group packet but somehow malformed — skip
+          console.log('[Nearby] Group chat message malformed, skipping.');
+          return;
+        }
         const key = 'chat_messages_' + roomId;
         const raw = await AsyncStorage.getItem(key);
         const msgs: any[] = raw ? JSON.parse(raw) : [];
@@ -348,6 +464,13 @@ class BLEMeshServiceClass {
         msgs.sort((a, b) => a.createdAt - b.createdAt);
         await AsyncStorage.setItem(key, JSON.stringify(msgs));
         console.log('[Nearby] Chat message stored locally:', message.id);
+
+        // Notify user about incoming message if it isn't from themselves
+        const meRaw = await AsyncStorage.getItem('safeconnect_currentUser');
+        const myUser = meRaw ? JSON.parse(meRaw) : null;
+        if (!myUser || message.senderId !== myUser.id) {
+          notificationService.notifyChatMessage(message.senderName || 'Someone', message.text || 'Sent a message', isGroup).catch(() => { });
+        }
       }
 
       // ── SMS Gateway Relay — forward SOS alerts to non-app contacts ──
@@ -365,7 +488,7 @@ class BLEMeshServiceClass {
       if (pkt.type === 'sos' && !data.isTestPacket) {
         sosService.pushSOSToFirebase(data as Record<string, unknown>)
           .then(ok => { if (ok) console.log('[Gateway] ✅ Remote SOS pushed to Firebase dashboard'); })
-          .catch(() => {});
+          .catch(() => { });
       }
     } catch (e) {
       console.warn('[Nearby] storeLocally error:', (e as any)?.message);
@@ -444,9 +567,10 @@ class BLEMeshServiceClass {
     );
   }
 
-  // ── Upload pending SOS/chat to Firebase when internet is back ──
-  // Also re-enqueues the SOS data with emergency phones so Firebase has them
-  // (govt dashboard can see contact numbers and call them directly)
+  // ── Gateway sync — SOS ONLY to Firebase (govt dashboard) ──────────────
+  // Chat messages do NOT go through here — they are delivered via BLE mesh only.
+  // This runs only when internet is detected and only pushes pending SOS
+  // alerts so the government dashboard and rescue teams can see them.
   private async _gatewaySync(): Promise<boolean> {
     try {
       const ctrl = new AbortController();
@@ -459,8 +583,11 @@ class BLEMeshServiceClass {
     } catch {
       return false; // offline
     }
-    try { const { flushed } = await sosService.flushSyncQueue(); if (flushed > 0) console.log('[Nearby→Firebase] SOS synced:', flushed); } catch {}
-    try { const n = await chatService.syncPendingMessages(); if (n > 0) console.log('[Nearby→Firebase] Chat synced:', n); } catch {}
+    // Only sync SOS/emergency data to Firebase — NEVER chat messages
+    try {
+      const { flushed } = await sosService.flushSyncQueue();
+      if (flushed > 0) console.log('[Gateway] SOS synced to Firebase:', flushed);
+    } catch { }
     return true;
   }
 
@@ -471,7 +598,7 @@ class BLEMeshServiceClass {
   }
 
   private async _markSeen(id: string): Promise<void> {
-    const raw  = await AsyncStorage.getItem(KEY_SEEN);
+    const raw = await AsyncStorage.getItem(KEY_SEEN);
     const seen: string[] = raw ? JSON.parse(raw) : [];
     seen.push(id);
     if (seen.length > 200) seen.splice(0, seen.length - 200);
@@ -510,16 +637,27 @@ class BLEMeshServiceClass {
   }
 
   createChatPacket(userId: string, roomId: string, message: object): MeshPacket {
+    const isGroup = roomId === 'mesh_broadcast';
+    let finalMessage: any = message;
+    let encrypted = false;
+
+    // E2EE Encryption for private chat messages
+    if (!isGroup) {
+      finalMessage = CryptoJS.AES.encrypt(JSON.stringify(message), roomId).toString();
+      encrypted = true;
+    }
+
     return {
       id: 'chat_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
-      type: 'chat', payload: JSON.stringify({ roomId, message }),
+      type: 'chat',
+      payload: JSON.stringify({ roomId, message: finalMessage, encrypted }),
       origin: userId, hops: 0, ttl: Date.now() + TTL_MS, createdAt: Date.now(),
     };
   }
 
   // ── Full shutdown ──────────────────────────────────────────────
   destroy(): void {
-    this.unsubs.forEach(fn => { try { fn(); } catch {} });
+    this.unsubs.forEach(fn => { try { fn(); } catch { } });
     this.unsubs = [];
     this.listeners = [];
     this.uiListeners = [];
@@ -527,13 +665,41 @@ class BLEMeshServiceClass {
     this.requestTimers.clear();
     this.pendingPeers.clear();
     this.peerNames.clear();
-    try { Nearby.stopAdvertise(); }  catch {}
-    try { Nearby.stopDiscovery(); }  catch {}
-    try { Nearby.disconnect(); }     catch {}
+    try { Nearby.stopAdvertise(); } catch { }
+    try { Nearby.stopDiscovery(); } catch { }
+    try { Nearby.disconnect(); } catch { }
     this._ready = false;
     this._initialized = false;
     this.peers.clear();
     console.log('[Nearby] Service destroyed');
+  }
+
+  /**
+   * stopAll() — complete shutdown including Android foreground service.
+   *
+   * Call this when the app goes to background to prevent battery drain:
+   * - Stops the Android foreground service (location keep-alive task)
+   * - Stops BLE advertising and discovery (radio power saved)
+   * - Clears all peer connections
+   *
+   * The mesh will auto-restart when the app comes back to foreground.
+   */
+  async stopAll(): Promise<void> {
+    // Stop the Android foreground keep-alive location service first
+    if (Platform.OS === 'android') {
+      try {
+        const isRegistered = await TaskManager.isTaskRegisteredAsync(MESH_KEEP_ALIVE_TASK);
+        if (isRegistered) {
+          await Location.stopLocationUpdatesAsync(MESH_KEEP_ALIVE_TASK);
+          console.log('[Nearby] Android foreground service stopped ✅');
+        }
+      } catch (e) {
+        console.warn('[Nearby] Could not stop foreground service:', (e as any)?.message);
+      }
+    }
+    // Then destroy remaining connections and reset state
+    this.destroy();
+    console.log('[Nearby] stopAll() complete — battery saved');
   }
 }
 

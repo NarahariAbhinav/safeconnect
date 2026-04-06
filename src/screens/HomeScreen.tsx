@@ -57,27 +57,38 @@ const { width } = Dimensions.get('window');
 
 // ─── Design Tokens ──────────────────────────────────────────────────
 const COLORS = {
-    bg: '#EBF4F7',
-    orange: '#E05A2B',
-    orangeLight: 'rgba(224,90,43,0.12)',
-    orangeGlow: 'rgba(224,90,43,0.25)',
-    brown: '#2C1A0E',
-    brownMid: '#5C3D25',
-    green: '#2A7A5A',
-    greenLight: 'rgba(42,122,90,0.12)',
-    greenBorder: 'rgba(42,122,90,0.28)',
-    muted: '#8C7060',
+    // Backgrounds
+    bg: '#F1F5FB',
     white: '#FFFFFF',
-    cardBg: 'rgba(255,255,255,0.88)',
-    cardBorder: 'rgba(44,26,14,0.08)',
-    red: '#D32F2F',
-    redLight: 'rgba(211,47,47,0.10)',
-    blue: '#1565C0',
-    blueLight: 'rgba(21,101,192,0.10)',
-    amber: '#E65100',
-    amberLight: 'rgba(230,81,0,0.10)',
+    cardBg: '#FFFFFF',
+    cardBorder: '#E4EAF4',
     navBg: '#FFFFFF',
-    navBorder: 'rgba(44,26,14,0.10)',
+    navBorder: '#E4EAF4',
+    // Text
+    brown: '#0F172A',       // deep navy — replaces muddy brown
+    brownMid: '#334155',
+    muted: '#64748B',
+    // Primary accent — safety orange → vivid coral-red
+    orange: '#FF5533',
+    orangeLight: 'rgba(255,85,51,0.10)',
+    orangeGlow: 'rgba(255,85,51,0.22)',
+    // Green
+    green: '#059669',
+    greenLight: 'rgba(5,150,105,0.10)',
+    greenBorder: 'rgba(5,150,105,0.25)',
+    // Red  
+    red: '#EF4444',
+    redLight: 'rgba(239,68,68,0.10)',
+    // Blue
+    blue: '#3B82F6',
+    blueLight: 'rgba(59,130,246,0.10)',
+    // Amber
+    amber: '#F59E0B',
+    amberLight: 'rgba(245,158,11,0.10)',
+    // Bubble colours (chat)
+    bubbleMe: '#3B82F6',
+    bubbleThem: '#F8FAFC',
+    offline: '#EF4444',
 };
 
 // ─── SVG Icons ────────────────────────────────────────────────────
@@ -272,7 +283,7 @@ const MeshStatusWidget: React.FC = () => (
     </Svg>
 );
 
-// ─── Quick Action Card ────────────────────────────────────────────
+// ─── Quick Action Card — Apple-style centered icon card ──────────────
 interface QuickActionProps {
     icon: React.ReactNode;
     label: string;
@@ -282,18 +293,15 @@ interface QuickActionProps {
     onPress: () => void;
 }
 const QuickAction: React.FC<QuickActionProps> = ({ icon, label, sublabel, bgColor, borderColor, onPress }) => (
-    <TouchableOpacity
-        style={[styles.quickAction, { backgroundColor: bgColor, borderColor }]}
-        onPress={onPress}
-        activeOpacity={0.75}
-    >
-        <View style={[styles.quickActionIcon, { backgroundColor: borderColor + '28' }]}>
+    <TouchableOpacity style={styles.quickAction} onPress={onPress} activeOpacity={0.78}>
+        <View style={[styles.quickActionIconWrap, { backgroundColor: bgColor }]}>
             {icon}
         </View>
-        <Text style={styles.quickActionLabel}>{label}</Text>
-        <Text style={styles.quickActionSub}>{sublabel}</Text>
+        <Text style={styles.quickActionLabel} numberOfLines={1}>{label}</Text>
+        <Text style={styles.quickActionSub} numberOfLines={1}>{sublabel}</Text>
     </TouchableOpacity>
 );
+
 
 // ─── Node Card ────────────────────────────────────────────────────
 interface NodeCardProps {
@@ -704,6 +712,67 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
         };
         checkFirstLaunch();
     }, []);
+
+    // ── Auto-start mesh on every app launch for returning users ──
+    useEffect(() => {
+        const autoStartMesh = async () => {
+            try {
+                const permsShown = await AsyncStorage.getItem('safeconnect_perms_shown');
+                if (permsShown && !bleMeshService.ready) {
+                    console.log('[HomeScreen] Returning user — auto-starting mesh silently...');
+                    permissionService.enableMesh({ displayName: userName, showEnabledAlert: false })
+                        .then(ok => {
+                            if (ok) console.log('[HomeScreen] ✅ Mesh auto-started on app launch');
+                            else console.log('[HomeScreen] Mesh auto-start failed (BT/WiFi/Location may be off)');
+                        }).catch(e => console.warn('[HomeScreen] Mesh auto-start error:', e));
+                }
+            } catch { }
+        };
+        const t = setTimeout(autoStartMesh, 1500);
+        return () => clearTimeout(t);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // ── Battery-efficient: stop mesh + relay after 5 min in background, restart on foreground ──
+    useEffect(() => {
+        let bgTimer: ReturnType<typeof setTimeout> | null = null;
+        const { AppState } = require('react-native');
+        const handleAppState = (nextState: string) => {
+            if (nextState === 'background' || nextState === 'inactive') {
+                // Stop background relay immediately — no point scanning with no UI
+                bleBackgroundRelayService.stopRelay();
+
+                // Stop mesh fully after 5 minutes in background
+                // (5 min gives time for notifications to arrive, but stops draining battery)
+                bgTimer = setTimeout(() => {
+                    if (bleMeshService.ready) {
+                        console.log('[HomeScreen] App in background 5 min — stopping mesh to save battery');
+                        bleMeshService.stopAll().catch(() => { });
+                    }
+                }, 5 * 60 * 1000); // 5 minutes
+            } else if (nextState === 'active') {
+                // Cancel pending kill timer
+                if (bgTimer) { clearTimeout(bgTimer); bgTimer = null; }
+
+                // Restart relay service if mesh is active
+                if (bleMeshService.ready && !bleBackgroundRelayService.active) {
+                    bleBackgroundRelayService.startRelay().catch(() => { });
+                }
+
+                // Restart mesh if it was stopped
+                if (!bleMeshService.ready) {
+                    AsyncStorage.getItem('safeconnect_perms_shown').then(shown => {
+                        if (shown) permissionService.enableMesh({ displayName: userName, showEnabledAlert: false })
+                            .catch(() => { });
+                    }).catch(() => { });
+                }
+            }
+        };
+        const sub = AppState.addEventListener('change', handleAppState);
+        return () => { sub?.remove(); if (bgTimer) clearTimeout(bgTimer); };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
 
     // ── Ensure background relay is active when user is on Home ──
     // This keeps offline messaging working in the background
@@ -1131,17 +1200,7 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                 </View>
             </Modal>
 
-            {/* ── Profile Sheet ── */}
-            <ProfileSheet
-                visible={showProfile}
-                user={user}
-                onClose={() => {
-                    setShowProfile(false);
-                    // FIX: Reset tab highlight when profile sheet is dismissed
-                    setActiveTab('home');
-                }}
-                onLogout={handleLogout}
-            />
+            {/* ── Profile Sheet — removed: replaced by ProfileScreen navigation ── */}
 
             {/* ── Top Header ── */}
             <Animated.View entering={FadeInDown.duration(500).delay(0)} style={styles.header}>
@@ -1155,6 +1214,15 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                     </View>
                 </View>
                 <View style={styles.headerRight}>
+                    {/* Avatar first — identity is primary */}
+                    <TouchableOpacity
+                        style={styles.avatarBtn}
+                        onPress={() => navigation.navigate('Profile', { user })}
+                        activeOpacity={0.7}
+                    >
+                        <Text style={styles.avatarText}>{userName.charAt(0).toUpperCase()}</Text>
+                    </TouchableOpacity>
+                    {/* Bell — secondary utility */}
                     <TouchableOpacity
                         style={styles.notifBtn}
                         activeOpacity={0.7}
@@ -1171,14 +1239,6 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                                 </Text>
                             </View>
                         )}
-                    </TouchableOpacity>
-                    {/* Avatar → opens Profile sheet */}
-                    <TouchableOpacity
-                        style={styles.avatarBtn}
-                        onPress={() => setShowProfile(true)}
-                        activeOpacity={0.7}
-                    >
-                        <Text style={styles.avatarText}>{userName.charAt(0).toUpperCase()}</Text>
                     </TouchableOpacity>
                 </View>
             </Animated.View>
@@ -1213,36 +1273,24 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                             </TouchableOpacity>
                         </View>
 
-                        {/* Emergency Services */}
-                        <View style={styles.emergencyServices}>
-                            <TouchableOpacity
-                                style={[styles.emergencyServiceBtn, { backgroundColor: COLORS.blueLight, borderColor: COLORS.blue }]}
-                                onPress={() => callEmergencyService('Police', '100')}
-                                activeOpacity={0.75}
-                            >
-                                <PhoneCallIcon color={COLORS.blue} size={18} />
-                                <Text style={[styles.emergencyServiceLabel, { color: COLORS.blue }]}>Police</Text>
-                                <Text style={[styles.emergencyServiceNum, { color: COLORS.blue }]}>100</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[styles.emergencyServiceBtn, { backgroundColor: COLORS.redLight, borderColor: COLORS.red }]}
-                                onPress={() => callEmergencyService('Ambulance', '108')}
-                                activeOpacity={0.75}
-                            >
-                                <AmbulanceIcon color={COLORS.red} size={18} />
-                                <Text style={[styles.emergencyServiceLabel, { color: COLORS.red }]}>Ambulance</Text>
-                                <Text style={[styles.emergencyServiceNum, { color: COLORS.red }]}>108</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[styles.emergencyServiceBtn, { backgroundColor: COLORS.amberLight, borderColor: COLORS.amber }]}
-                                onPress={() => callEmergencyService('Fire', '101')}
-                                activeOpacity={0.75}
-                            >
-                                <FireIcon color={COLORS.amber} size={18} />
-                                <Text style={[styles.emergencyServiceLabel, { color: COLORS.amber }]}>Fire</Text>
-                                <Text style={[styles.emergencyServiceNum, { color: COLORS.amber }]}>101</Text>
-                            </TouchableOpacity>
-                        </View>
+                        {/* Emergency call shortcut — clean text link, no clutter */}
+                        <TouchableOpacity
+                            onPress={() => Alert.alert(
+                                '📞 Emergency Services',
+                                'Which service do you need?',
+                                [
+                                    { text: 'Police — 100', onPress: () => Linking.openURL('tel:100') },
+                                    { text: 'Ambulance — 108', onPress: () => Linking.openURL('tel:108') },
+                                    { text: 'Fire — 101', onPress: () => Linking.openURL('tel:101') },
+                                    { text: 'Cancel', style: 'cancel' },
+                                ]
+                            )}
+                            activeOpacity={0.7}
+                            style={styles.emergencyCallLink}
+                        >
+                            <PhoneCallIcon color={COLORS.red} size={14} />
+                            <Text style={styles.emergencyCallLinkText}>Call Emergency Services  →</Text>
+                        </TouchableOpacity>
                     </View>
                 </Animated.View>
 
@@ -1299,6 +1347,7 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                             onPress={() => navigation.navigate('MeshChat', {
                                 userId: user?.id ?? user?.email ?? 'anonymous',
                                 userName,
+                                userPhone: user?.phone ?? '',
                             })}
                         />
                         <QuickAction
@@ -1315,153 +1364,122 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
                     </View>
                 </Animated.View>
 
-                {/* ── Feature Tabs ── */}
+                {/* ── Trusted Contacts strip — always visible ── */}
                 <Animated.View entering={FadeInUp.duration(500).delay(260)}>
-                    <View style={styles.featureTabsRow}>
-                        {[
-                            { id: 'contacts' as const, label: 'Contacts' },
-                            { id: 'nodes' as const, label: 'Nearby Nodes' },
-                            { id: 'alerts' as const, label: 'Community Alerts' },
-                        ].map(tab => {
-                            const isActive = activeFeature === tab.id;
+                    <View style={styles.sectionHeader}>
+                        <Text style={styles.sectionTitle}>Trusted Contacts</Text>
+                        <TouchableOpacity activeOpacity={0.7} onPress={() => navigation.navigate('ContactsManager')}>
+                            <Text style={styles.seeAll}>Manage →</Text>
+                        </TouchableOpacity>
+                    </View>
+
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.contactsStrip}>
+                        {/* Add contact button */}
+                        <TouchableOpacity
+                            style={styles.contactAvatarAdd}
+                            onPress={() => navigation.navigate('ContactsManager')}
+                            activeOpacity={0.75}
+                        >
+                            <Text style={styles.contactAvatarAddIcon}>+</Text>
+                            <Text style={styles.contactAvatarName}>Add</Text>
+                        </TouchableOpacity>
+
+                        {contactsForDisplay.map(contact => {
+                            const ini = contact.name.split(' ').map((w: string) => w[0] ?? '').join('').slice(0, 2).toUpperCase();
+                            const hue = (contact.name.charCodeAt(0) * 37) % 360;
+                            const bg = `hsl(${hue},60%,90%)`;
+                            const fg = `hsl(${hue},50%,35%)`;
                             return (
                                 <TouchableOpacity
-                                    key={tab.id}
-                                    style={[styles.featureTab, isActive && styles.featureTabActive]}
-                                    onPress={() => setActiveFeature(isActive ? null : tab.id)}
-                                    activeOpacity={0.75}
+                                    key={contact.id}
+                                    style={styles.contactAvatarWrap}
+                                    activeOpacity={0.78}
+                                    onPress={() => Alert.alert(
+                                        contact.name,
+                                        contact.relationship + ' · ' + contact.phone,
+                                        [
+                                            { text: '📞 Call', onPress: () => Linking.openURL(`tel:${contact.phone}`) },
+                                            {
+                                                text: '💬 Mesh Chat', onPress: () => navigation.navigate('MeshChat', {
+                                                    userId: user?.id ?? 'anonymous', userName, userPhone: user?.phone ?? '',
+                                                }),
+                                            },
+                                            { text: 'Cancel', style: 'cancel' },
+                                        ]
+                                    )}
                                 >
-                                    <Text style={[styles.featureTabText, isActive && styles.featureTabTextActive]}>
-                                        {tab.label}
-                                    </Text>
+                                    <View style={[styles.contactAvatar, { backgroundColor: bg }]}>
+                                        <Text style={[styles.contactAvatarText, { color: fg }]}>{ini}</Text>
+                                    </View>
+                                    <Text style={styles.contactAvatarName} numberOfLines={1}>{contact.name.split(' ')[0]}</Text>
                                 </TouchableOpacity>
                             );
                         })}
-                    </View>
+
+                        {contactsForDisplay.length === 0 && (
+                            <Text style={{ color: COLORS.muted, fontSize: 13, paddingVertical: 20, paddingLeft: 4 }}>
+                                No contacts yet — tap Add
+                            </Text>
+                        )}
+                    </ScrollView>
                 </Animated.View>
 
-                {/* ── Feature Panels ── */}
-                {activeFeature === 'nodes' && (
-                    <Animated.View entering={FadeInUp.duration(350)}>
-                        <View style={styles.sectionHeader}>
-                            <Text style={styles.sectionTitle}>Nearby Nodes</Text>
-                            <TouchableOpacity
-                                activeOpacity={0.7}
-                                onPress={() => navigation.navigate('MeshStatus', {
-                                    userId: user?.id ?? user?.email ?? 'anonymous',
-                                    userName,
-                                })}
-                            >
-                                <Text style={styles.seeAll}>Open Monitor →</Text>
-                            </TouchableOpacity>
+                {/* ── Community Alerts ── */}
+                <Animated.View entering={FadeInUp.duration(500).delay(300)} style={{ marginBottom: 32 }}>
+                    <View style={styles.sectionHeader}>
+                        <Text style={styles.sectionTitle}>Community Alerts</Text>
+                        <View style={[styles.alertCountBadge, { backgroundColor: COLORS.redLight }]}>
+                            <Text style={[styles.alertCountText, { color: COLORS.red }]}>{communityAlerts.length} active</Text>
                         </View>
-                        <View style={styles.nodesCard}>
-                            {nearbyNodes.map((node, i) => (
-                                <View key={node.name}>
-                                    <NodeCard {...node} />
-                                    {i < nearbyNodes.length - 1 && <View style={styles.nodeDivider} />}
-                                </View>
-                            ))}
-                        </View>
-                    </Animated.View>
-                )}
+                    </View>
+                    {communityAlerts.map((alert, i) => (
+                        <AlertCard key={i} {...alert} />
+                    ))}
+                </Animated.View>
 
-                {activeFeature === 'contacts' && (
-                    <Animated.View entering={FadeInUp.duration(350)}>
-                        <View style={styles.sectionHeader}>
-                            <Text style={styles.sectionTitle}>Contacts</Text>
-                            <TouchableOpacity
-                                activeOpacity={0.7}
-                                onPress={() => navigation.navigate('ContactsManager')}
-                            >
-                                <Text style={styles.seeAll}>Manage →</Text>
-                            </TouchableOpacity>
-                        </View>
-                        {contactsForDisplay.length === 0 ? (
-                            <TouchableOpacity
-                                style={styles.emptyContactsCard}
-                                onPress={() => navigation.navigate('ContactsManager')}
-                                activeOpacity={0.8}
-                            >
-                                <Text style={styles.emptyContactsEmoji}>👥</Text>
-                                <Text style={styles.emptyContactsTitle}>No Trusted Contacts</Text>
-                                <Text style={styles.emptyContactsSub}>Tap to add people from your contacts</Text>
-                            </TouchableOpacity>
-                        ) : (
-                            <View style={styles.contactsCard}>
-                                {contactsForDisplay.map((contact, i) => (
-                                    <View key={contact.id}>
-                                        <TouchableOpacity
-                                            activeOpacity={0.8}
-                                            onPress={() => navigation.navigate('ContactDetail', { contactId: contact.id })}
-                                        >
-                                            <ContactCard
-                                                name={contact.name}
-                                                relationship={contact.relationship}
-                                                phone={contact.phone}
-                                            />
-                                        </TouchableOpacity>
-                                        {i < contactsForDisplay.length - 1 && <View style={styles.nodeDivider} />}
-                                    </View>
-                                ))}
-                            </View>
-                        )}
-                    </Animated.View>
-                )}
-
-                {activeFeature === 'alerts' && (
-                    <Animated.View entering={FadeInUp.duration(350)} style={{ marginBottom: 24 }}>
-                        <View style={styles.sectionHeader}>
-                            <Text style={styles.sectionTitle}>Community Alerts</Text>
-                            <TouchableOpacity activeOpacity={0.7}>
-                                <Text style={styles.seeAll}>See all →</Text>
-                            </TouchableOpacity>
-                        </View>
-                        {communityAlerts.map((alert, i) => (
-                            <AlertCard key={i} {...alert} />
-                        ))}
-                    </Animated.View>
-                )}
 
             </ScrollView>
 
-            {/* ── Bottom Navigation ── */}
-            <View style={styles.bottomNav}>
-                {[
-                    { id: 'home', label: 'Home', icon: (c: string) => <HomeNavIcon color={c} /> },
-                    { id: 'map', label: 'Relief Map', icon: (c: string) => <MapNavIcon color={c} /> },
-                    { id: 'alerts', label: 'Report Need', icon: (c: string) => <AlertIcon color={c} size={22} /> },
-                    { id: 'profile', label: 'Profile', icon: (c: string) => <ProfileNavIcon color={c} /> },
-                ].map(tab => {
-                    const isActive = activeTab === tab.id;
-                    return (
-                        <TouchableOpacity
-                            key={tab.id}
-                            style={styles.navItem}
-                            onPress={() => {
-                                setActiveTab(tab.id);
-                                if (tab.id === 'profile') {
-                                    setShowProfile(true);
-                                } else if (tab.id === 'map') {
-                                    navigation.navigate('ReliefMap' as any, { location: null });
-                                } else if (tab.id === 'alerts') {
-                                    navigation.navigate('NeedsReport' as any, {
-                                        userId: String(user?.id ?? user?.email ?? 'anonymous'),
-                                        userName: String(userName ?? 'User'),
-                                        location: null,
-                                    });
-                                }
-                            }}
-                            activeOpacity={0.7}
-                        >
-                            {tab.icon(isActive ? COLORS.orange : COLORS.muted)}
-                            <Text style={[styles.navLabel, isActive && styles.navLabelActive]}>
-                                {tab.label}
-                            </Text>
-                            {isActive && <View style={styles.navActiveDot} />}
-                        </TouchableOpacity>
-                    );
-                })}
+            {/* ── Modern Floating Bottom Navigation ── */}
+            <View style={styles.navWrapper}>
+                <View style={styles.bottomNav}>
+                    {[
+                        { id: 'home', label: 'Home', icon: (c: string) => <HomeNavIcon color={c} /> },
+                        { id: 'map', label: 'Map', icon: (c: string) => <MapNavIcon color={c} /> },
+                        { id: 'alerts', label: 'Report', icon: (c: string) => <AlertIcon color={c} size={22} /> },
+                        { id: 'profile', label: 'Profile', icon: (c: string) => <ProfileNavIcon color={c} /> },
+                    ].map(tab => {
+                        const isActive = activeTab === tab.id;
+                        return (
+                            <TouchableOpacity
+                                key={tab.id}
+                                style={[styles.navItem, isActive && styles.navItemActive]}
+                                onPress={() => {
+                                    setActiveTab(tab.id);
+                                    if (tab.id === 'profile') {
+                                        navigation.navigate('Profile' as any, { user });
+                                    } else if (tab.id === 'map') {
+                                        navigation.navigate('ReliefMap' as any, { location: null });
+                                    } else if (tab.id === 'alerts') {
+                                        navigation.navigate('NeedsReport' as any, {
+                                            userId: String(user?.id ?? user?.email ?? 'anonymous'),
+                                            userName: String(userName ?? 'User'),
+                                            location: null,
+                                        });
+                                    }
+                                }}
+                                activeOpacity={0.85}
+                            >
+                                {tab.icon(isActive ? COLORS.orange : COLORS.muted)}
+                                {isActive && (
+                                    <Text style={styles.navLabelActive}>
+                                        {tab.label}
+                                    </Text>
+                                )}
+                            </TouchableOpacity>
+                        );
+                    })}
+                </View>
             </View>
 
         </SafeAreaView>
@@ -1795,12 +1813,44 @@ const styles = StyleSheet.create({
     featureTabText: { fontSize: 11, fontWeight: '700', color: COLORS.brown, letterSpacing: -0.2, textAlign: 'center' },
     featureTabTextActive: { color: COLORS.orange },
 
-    // Quick Actions
-    quickActionsGrid: { flexDirection: 'row', flexWrap: 'nowrap', justifyContent: 'space-between', gap: 6, marginBottom: 24 },
-    quickAction: { width: (width - 36 - 18) / 4, borderWidth: 1.5, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 8, gap: 4, alignItems: 'center' },
-    quickActionIcon: { width: 30, height: 30, borderRadius: 9, alignItems: 'center', justifyContent: 'center', marginBottom: 2 },
-    quickActionLabel: { fontSize: 10.5, fontWeight: '700', color: COLORS.brown, letterSpacing: -0.2, textAlign: 'center' },
-    quickActionSub: { fontSize: 9, fontWeight: '500', color: COLORS.muted, textAlign: 'center' },
+    // Quick Actions — Apple-style 4-per-row icon grid
+    quickActionsGrid: {
+        flexDirection: 'row', flexWrap: 'wrap',
+        justifyContent: 'space-between', gap: 12, marginBottom: 28,
+    },
+    quickAction: {
+        width: (width - 36 - 36) / 4,
+        backgroundColor: COLORS.white,
+        borderRadius: 20,
+        paddingVertical: 14, paddingHorizontal: 4,
+        alignItems: 'center', gap: 8,
+        shadowColor: '#0F172A',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.06,
+        shadowRadius: 8,
+        elevation: 2,
+    },
+    quickActionIconWrap: {
+        width: 52, height: 52, borderRadius: 16,
+        alignItems: 'center', justifyContent: 'center',
+    },
+    quickActionIcon: {  // alias kept for compat
+        width: 52, height: 52, borderRadius: 16,
+        alignItems: 'center', justifyContent: 'center',
+    },
+    quickActionLabel: {
+        fontSize: 11.5, fontWeight: '700', color: COLORS.brown,
+        textAlign: 'center', letterSpacing: -0.2,
+    },
+    quickActionSub: {
+        fontSize: 9.5, fontWeight: '500', color: COLORS.muted,
+        textAlign: 'center',
+    },
+    // Legacy — kept so nothing breaks
+    quickActionStripe: { width: 0 },
+    quickActionText: {},
+    quickActionArrow: { width: 0 },
+
 
     // Nodes
     nodesCard: { backgroundColor: COLORS.cardBg, borderWidth: 1, borderColor: COLORS.cardBorder, borderRadius: 18, overflow: 'hidden', marginBottom: 32 },
@@ -1815,12 +1865,27 @@ const styles = StyleSheet.create({
     statusDot: { width: 8, height: 8, borderRadius: 4 },
     nodeDivider: { height: 1, backgroundColor: 'rgba(44,26,14,0.06)', marginHorizontal: 14 },
 
-    // Contacts
+    // Emergency call link
+    emergencyCallLink: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4, paddingTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(239,68,68,0.12)' },
+    emergencyCallLinkText: { fontSize: 12, fontWeight: '700', color: COLORS.red },
+
+    // Contacts horizontal strip
+    contactsStrip: { paddingBottom: 8, paddingTop: 4, gap: 16, flexDirection: 'row', alignItems: 'flex-start', marginBottom: 24 },
+    contactAvatarWrap: { alignItems: 'center', width: 58 },
+    contactAvatar: { width: 52, height: 52, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginBottom: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 6, elevation: 2 },
+    contactAvatarText: { fontSize: 15, fontWeight: '800' },
+    contactAvatarName: { fontSize: 11, fontWeight: '600', color: COLORS.muted, textAlign: 'center' },
+    contactAvatarAdd: { alignItems: 'center', width: 58 },
+    contactAvatarAddIcon: { width: 52, height: 52, borderRadius: 16, borderWidth: 2, borderStyle: 'dashed', borderColor: COLORS.cardBorder, backgroundColor: COLORS.cardBg, fontSize: 24, fontWeight: '300', color: COLORS.muted, textAlign: 'center', textAlignVertical: 'center', lineHeight: 50, marginBottom: 6 },
+
+    // Alert count badge
+    alertCountBadge: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 },
+    alertCountText: { fontSize: 11, fontWeight: '700' },
+
+    // Contacts (legacy card)
     contactsCard: { backgroundColor: COLORS.cardBg, borderWidth: 1, borderColor: COLORS.cardBorder, borderRadius: 18, overflow: 'hidden', marginBottom: 32 },
     contactRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 12 },
     contactLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-    contactAvatar: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.greenLight },
-    contactAvatarText: { fontSize: 12, fontWeight: '800', color: COLORS.green },
     contactName: { fontSize: 13, fontWeight: '700', color: COLORS.brown, letterSpacing: -0.2 },
     contactMeta: { fontSize: 11, fontWeight: '500', color: COLORS.muted },
     contactRight: { alignItems: 'flex-end', gap: 6 },
@@ -1849,12 +1914,45 @@ const styles = StyleSheet.create({
         fontSize: 12, fontWeight: '500', color: COLORS.muted,
     },
 
-    // Bottom Nav
-    bottomNav: { flexDirection: 'row', backgroundColor: COLORS.navBg, borderTopWidth: 1, borderTopColor: COLORS.navBorder, paddingBottom: 8, paddingTop: 8, shadowColor: '#000', shadowOffset: { width: 0, height: -2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 8 },
-    navItem: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 3, paddingVertical: 4, position: 'relative' },
-    navLabel: { fontSize: 10, fontWeight: '600', color: COLORS.muted, letterSpacing: 0.1 },
-    navLabelActive: { color: COLORS.orange },
-    navActiveDot: { position: 'absolute', bottom: -4, width: 4, height: 4, borderRadius: 2, backgroundColor: COLORS.orange },
+    // Modern Floating Bottom Nav
+    navWrapper: {
+        backgroundColor: COLORS.bg,
+        paddingHorizontal: 20,
+        paddingBottom: 20,
+        paddingTop: 8,
+    },
+    bottomNav: {
+        flexDirection: 'row',
+        backgroundColor: COLORS.white,
+        borderRadius: 32,
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        shadowColor: COLORS.brown,
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.1,
+        shadowRadius: 18,
+        elevation: 8,
+    },
+    navItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        borderRadius: 24,
+    },
+    navItemActive: {
+        backgroundColor: COLORS.orangeLight,
+    },
+    navLabelActive: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: COLORS.orange,
+        marginLeft: 6,
+        letterSpacing: -0.2,
+    },
 });
 
 export default HomeScreen;

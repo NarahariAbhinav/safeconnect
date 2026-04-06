@@ -5,12 +5,12 @@ import React, { Component, useEffect, useState } from 'react';
 import { LogBox, StatusBar, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Text } from 'react-native-paper';
 import Animated, {
-    Easing,
-    useAnimatedStyle,
-    useSharedValue,
-    withRepeat,
-    withSequence,
-    withTiming,
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withTiming,
 } from 'react-native-reanimated';
 import Svg, { Circle, Line } from 'react-native-svg';
 import ContactDetailScreen from './src/screens/ContactDetailScreen';
@@ -22,6 +22,7 @@ import MeshChatScreen from './src/screens/MeshChatScreen';
 import MeshStatusScreen from './src/screens/MeshStatusScreen';
 import NeedsReportScreen from './src/screens/NeedsReportScreen';
 import OnboardingScreen from './src/screens/OnboardingScreen';
+import ProfileScreen from './src/screens/ProfileScreen';
 import ReliefMapScreen from './src/screens/ReliefMapScreen';
 import ResourceOfferScreen from './src/screens/ResourceOfferScreen';
 import SignupScreen from './src/screens/SignupScreen';
@@ -292,6 +293,11 @@ const App = () => {
           <Stack.Screen
             name="MeshChat"
             component={MeshChatScreen as React.ComponentType<any>}
+            options={{ animation: 'slide_from_right' }}
+          />
+          <Stack.Screen
+            name="Profile"
+            component={ProfileScreen as React.ComponentType<any>}
             options={{ animation: 'slide_from_right' }}
           />
         </Stack.Navigator>

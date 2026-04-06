@@ -214,6 +214,24 @@ async function activateSOS(
     // Try immediate sync (fire-and-forget)
     flushSyncQueue().catch(() => { });
 
+    // Also push directly to Firebase right now (belt-and-suspenders for dashboard visibility)
+    // The queue is the reliable fallback; this direct push is the fast path.
+    pushSOSToFirebase({ ...record, synced: true })
+        .then(ok => {
+            if (ok) {
+                console.log('[SOS] ✅ Direct Firebase push succeeded');
+                // Mark as synced in local history
+                record.synced = true;
+            } else {
+                // Not online yet — retry once after 5s
+                console.log('[SOS] Direct push failed (offline?), will retry via queue in 5s');
+                setTimeout(() => flushSyncQueue().catch(() => { }), 5000);
+            }
+        })
+        .catch(() => {
+            setTimeout(() => flushSyncQueue().catch(() => { }), 5000);
+        });
+
     // Send SMS alerts to emergency contacts (if available)
     try {
         const allContacts = await getTrustedContacts();
@@ -484,7 +502,7 @@ async function pushSOSToFirebase(data: Record<string, unknown>): Promise<boolean
         const res = await fetch(`${FIREBASE_URL}/soss/${id}.json`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...data, gatewayRelayed: true, synced: true }),
+            body: JSON.stringify({ ...data, gatewayRelayed: true, viaBleMesh: true, synced: true }),
             signal: ctrl.signal,
         });
         clearTimeout(t);

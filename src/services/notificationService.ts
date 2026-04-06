@@ -150,6 +150,16 @@ class NotificationServiceClass {
         await this._schedule({ title, body, channelId: 'safeconnect_info' });
     }
 
+    /** 💬 Mesh Chat Message Received offline */
+    async notifyChatMessage(senderName: string, text: string, isGroup: boolean = false): Promise<void> {
+        const title = isGroup ? '📡 Mesh Group Chat' : `💬 Message from ${senderName}`;
+        await this._schedule({
+            title,
+            body: isGroup ? `${senderName}: ${text}` : text,
+            channelId: 'safeconnect_info',
+        });
+    }
+
     /** Internal schedule helper — no-ops in Expo Go */
     private async _schedule(params: {
         title: string;

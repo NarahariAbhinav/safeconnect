@@ -10,7 +10,7 @@ import { bleMeshService } from './BLEMeshService';
 
 const QUEUE_KEY = 'mesh_chat_pending';
 const MAX_ATTEMPTS = 10;
-const EXPIRY_MS    = 24 * 60 * 60 * 1000; // 24 hours
+const EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 interface PendingChat {
   roomId: string;
@@ -37,7 +37,7 @@ class MeshChatHelperClass {
 
   // Attempt to relay all pending messages — call this periodically
   async relayPendingMessages(): Promise<number> {
-    if (!bleMeshService.ready) return 0;
+    // No ready guard needed — broadcast() now enqueues even when not ready
 
     const pending = await this._load();
     if (!pending.length) return 0;

@@ -1,0 +1,1653 @@
+{
+  "chats": {
+    "chat_room_148_guest_1773476917346": {
+      "messages": {
+        "msg_1773477682752_g5rg4u": {
+          "createdAt": 1773477682752,
+          "id": "msg_1773477682752_g5rg4u",
+          "roomId": "chat_room_148_guest_1773476917346",
+          "senderId": "guest_1773476917346",
+          "senderName": "Pujitha",
+          "status": "saved",
+          "text": "Hi",
+          "type": "text"
+        },
+        "msg_1773477816360_uap4pm": {
+          "createdAt": 1773477816360,
+          "id": "msg_1773477816360_uap4pm",
+          "roomId": "chat_room_148_guest_1773476917346",
+          "senderId": "guest_1773476917346",
+          "senderName": "Pujitha",
+          "status": "saved",
+          "text": "Hi",
+          "type": "text"
+        }
+      },
+      "meta": {
+        "id": "chat_room_148_guest_1773476917346",
+        "lastMessage": "Hi",
+        "lastMessageTime": 1773477816360,
+        "participantIds": [
+          "guest_1773476917346",
+          "148"
+        ],
+        "participantNames": [
+          "Pujitha",
+          "V.vaishnavi Nmims"
+        ],
+        "updatedAt": 1773477816591
+      }
+    },
+    "chat_room_1772446626805_2230": {
+      "messages": {
+        "msg_1772449848616_p8apyk": {
+          "createdAt": 1772449848617,
+          "id": "msg_1772449848616_p8apyk",
+          "roomId": "chat_room_1772446626805_2230",
+          "senderId": "1772446626805",
+          "senderName": "Abhinav",
+          "status": "saved",
+          "text": "Hi",
+          "type": "text"
+        }
+      },
+      "meta": {
+        "id": "chat_room_1772446626805_2230",
+        "lastMessage": "Hi",
+        "lastMessageTime": 1772449848617,
+        "participantIds": [
+          "1772446626805",
+          "2230"
+        ],
+        "participantNames": [
+          "Abhinav",
+          "Sainath❤"
+        ],
+        "updatedAt": 1772449849209
+      }
+    },
+    "chat_room_2230_guest_1773132899886": {
+      "messages": {
+        "msg_1773296287117_957lw6": {
+          "createdAt": 1773296287117,
+          "id": "msg_1773296287117_957lw6",
+          "roomId": "chat_room_2230_guest_1773132899886",
+          "senderId": "guest_1773132899886",
+          "senderName": "Abhinav",
+          "status": "saved",
+          "text": "Hi",
+          "type": "text"
+        }
+      },
+      "meta": {
+        "id": "chat_room_2230_guest_1773132899886",
+        "lastMessage": "Hi",
+        "lastMessageTime": 1773296287117,
+        "participantIds": [
+          "guest_1773132899886",
+          "2230"
+        ],
+        "participantNames": [
+          "Abhinav",
+          "Sainath❤"
+        ],
+        "updatedAt": 1773296287367
+      }
+    },
+    "chat_room_2834_guest_1772691789510": {
+      "messages": {
+        "msg_1772691940805_ii8s6u": {
+          "createdAt": 1772691940805,
+          "id": "msg_1772691940805_ii8s6u",
+          "roomId": "chat_room_2834_guest_1772691789510",
+          "senderId": "guest_1772691789510",
+          "senderName": "Snehil",
+          "status": "saved",
+          "text": "Hi",
+          "type": "text"
+        }
+      },
+      "meta": {
+        "id": "chat_room_2834_guest_1772691789510",
+        "lastMessage": "Hi",
+        "lastMessageTime": 1772691940805,
+        "participantIds": [
+          "guest_1772691789510",
+          "2834"
+        ],
+        "participantNames": [
+          "Snehil",
+          "Abinav Nmims"
+        ],
+        "updatedAt": 1772691941028
+      }
+    },
+    "chat_room_2834_guest_1772700596577": {
+      "messages": {
+        "msg_1772700877445_23k9zo": {
+          "createdAt": 1772700877445,
+          "id": "msg_1772700877445_23k9zo",
+          "roomId": "chat_room_2834_guest_1772700596577",
+          "senderId": "guest_1772700596577",
+          "senderName": "Snehil",
+          "status": "saved",
+          "text": "Hi",
+          "type": "text"
+        },
+        "msg_1772787639194_34dh88": {
+          "createdAt": 1772787639196,
+          "id": "msg_1772787639194_34dh88",
+          "roomId": "chat_room_2834_guest_1772700596577",
+          "senderId": "guest_1772700596577",
+          "senderName": "Snehil",
+          "status": "saved",
+          "text": "Hi",
+          "type": "text"
+        },
+        "msg_1773297595674_z66719": {
+          "createdAt": 1773297595674,
+          "id": "msg_1773297595674_z66719",
+          "roomId": "chat_room_2834_guest_1772700596577",
+          "senderId": "guest_1772700596577",
+          "senderName": "Snehil",
+          "status": "saved",
+          "text": "Hi",
+          "type": "text"
+        }
+      },
+      "meta": {
+        "id": "chat_room_2834_guest_1772700596577",
+        "lastMessage": "Hi",
+        "lastMessageTime": 1773297595674,
+        "participantIds": [
+          "guest_1772700596577",
+          "2834"
+        ],
+        "participantNames": [
+          "Snehil",
+          "Abinav Nmims"
+        ],
+        "updatedAt": 1773297595955
+      }
+    },
+    "chat_room_3179_guest_1773298221887": {
+      "messages": {
+        "msg_1773298317519_lwqebw": {
+          "createdAt": 1773298317519,
+          "id": "msg_1773298317519_lwqebw",
+          "roomId": "chat_room_3179_guest_1773298221887",
+          "senderId": "guest_1773298221887",
+          "senderName": "Ananth",
+          "status": "saved",
+          "text": "Hi",
+          "type": "text"
+        }
+      },
+      "meta": {
+        "id": "chat_room_3179_guest_1773298221887",
+        "lastMessage": "Hi",
+        "lastMessageTime": 1773298317519,
+        "participantIds": [
+          "guest_1773298221887",
+          "3179"
+        ],
+        "participantNames": [
+          "Ananth",
+          "Nitro Man"
+        ],
+        "updatedAt": 1773298317825
+      }
+    },
+    "chat_room_3783_guest_1772697612594": {
+      "messages": {
+        "msg_1772700861167_sxkxru": {
+          "createdAt": 1772700861167,
+          "id": "msg_1772700861167_sxkxru",
+          "roomId": "chat_room_3783_guest_1772697612594",
+          "senderId": "guest_1772697612594",
+          "senderName": "Abhinav",
+          "status": "saved",
+          "text": "Hi",
+          "type": "text"
+        }
+      },
+      "meta": {
+        "id": "chat_room_3783_guest_1772697612594",
+        "lastMessage": "Hi",
+        "lastMessageTime": 1772700861167,
+        "participantIds": [
+          "guest_1772697612594",
+          "3783"
+        ],
+        "participantNames": [
+          "Abhinav",
+          "Snehil"
+        ],
+        "updatedAt": 1772700861435
+      }
+    },
+    "chat_room_5516_guest_1772700596577": {
+      "messages": {
+        "msg_1773298348941_jmnb9b": {
+          "createdAt": 1773298348941,
+          "id": "msg_1773298348941_jmnb9b",
+          "roomId": "chat_room_5516_guest_1772700596577",
+          "senderId": "guest_1772700596577",
+          "senderName": "Snehil",
+          "status": "saved",
+          "text": "Hi",
+          "type": "text"
+        }
+      },
+      "meta": {
+        "id": "chat_room_5516_guest_1772700596577",
+        "lastMessage": "Hi",
+        "lastMessageTime": 1773298348941,
+        "participantIds": [
+          "guest_1772700596577",
+          "5516"
+        ],
+        "participantNames": [
+          "Snehil",
+          "Ananth Nmims"
+        ],
+        "updatedAt": 1773298349473
+      }
+    },
+    "chat_room_8036_guest_1773477584231": {
+      "messages": {
+        "msg_1773477802649_i9hfv1": {
+          "createdAt": 1773477802649,
+          "id": "msg_1773477802649_i9hfv1",
+          "roomId": "chat_room_8036_guest_1773477584231",
+          "senderId": "guest_1773477584231",
+          "senderName": "Vaishnavi",
+          "status": "saved",
+          "text": "Hi",
+          "type": "text"
+        },
+        "msg_1773477824053_bip8wl": {
+          "createdAt": 1773477824053,
+          "id": "msg_1773477824053_bip8wl",
+          "roomId": "chat_room_8036_guest_1773477584231",
+          "senderId": "guest_1773477584231",
+          "senderName": "Vaishnavi",
+          "status": "saved",
+          "text": "Testing",
+          "type": "text"
+        }
+      },
+      "meta": {
+        "id": "chat_room_8036_guest_1773477584231",
+        "lastMessage": "Testing",
+        "lastMessageTime": 1773477824053,
+        "participantIds": [
+          "guest_1773477584231",
+          "8036"
+        ],
+        "participantNames": [
+          "Vaishnavi",
+          "Pujitha NMIMS"
+        ],
+        "updatedAt": 1773477824356
+      }
+    },
+    "mesh_broadcast": {
+      "messages": {
+        "msg_1773477693881_yb46pz": {
+          "createdAt": 1773477693881,
+          "id": "msg_1773477693881_yb46pz",
+          "roomId": "mesh_broadcast",
+          "senderId": "guest_1773477584231",
+          "senderName": "Vaishnavi",
+          "status": "delivered",
+          "text": "Hi",
+          "type": "text"
+        },
+        "msg_1773656273643_7f43ld": {
+          "createdAt": 1773656273643,
+          "id": "msg_1773656273643_7f43ld",
+          "roomId": "mesh_broadcast",
+          "senderId": "1773656065464",
+          "senderName": "John ",
+          "status": "delivered",
+          "text": "Hi",
+          "type": "text"
+        },
+        "msg_1773656331118_cokfut": {
+          "createdAt": 1773656331118,
+          "id": "msg_1773656331118_cokfut",
+          "roomId": "mesh_broadcast",
+          "senderId": "1773656065464",
+          "senderName": "John ",
+          "status": "delivered",
+          "text": "Hi",
+          "type": "text"
+        },
+        "msg_1773656337580_5u3gql": {
+          "createdAt": 1773656337580,
+          "id": "msg_1773656337580_5u3gql",
+          "roomId": "mesh_broadcast",
+          "senderId": "1773656214890",
+          "senderName": "N",
+          "status": "delivered",
+          "text": "Hi",
+          "type": "text"
+        },
+        "msg_1773656363462_aeuskm": {
+          "createdAt": 1773656363462,
+          "id": "msg_1773656363462_aeuskm",
+          "roomId": "mesh_broadcast",
+          "senderId": "1773656065464",
+          "senderName": "John ",
+          "status": "delivered",
+          "text": "Hi",
+          "type": "text"
+        },
+        "msg_1773656814827_vjw5vw": {
+          "createdAt": 1773656814827,
+          "id": "msg_1773656814827_vjw5vw",
+          "roomId": "mesh_broadcast",
+          "senderId": "guest_1773656757165",
+          "senderName": "Anantha",
+          "status": "delivered",
+          "text": "Hi",
+          "type": "text"
+        }
+      }
+    },
+    "room_8096448937_9705431557": {
+      "messages": {
+        "msg_1773656283072_8yps46": {
+          "createdAt": 1773656283072,
+          "id": "msg_1773656283072_8yps46",
+          "roomId": "room_8096448937_9705431557",
+          "senderId": "1773656065464",
+          "senderName": "John ",
+          "status": "delivered",
+          "text": "Hi",
+          "type": "text"
+        },
+        "msg_1773656292611_semi5w": {
+          "createdAt": 1773656292611,
+          "id": "msg_1773656292611_semi5w",
+          "roomId": "room_8096448937_9705431557",
+          "senderId": "1773656214890",
+          "senderName": "N",
+          "status": "delivered",
+          "text": "Hi",
+          "type": "text"
+        },
+        "msg_1773656312324_025t16": {
+          "createdAt": 1773656312324,
+          "id": "msg_1773656312324_025t16",
+          "roomId": "room_8096448937_9705431557",
+          "senderId": "1773656065464",
+          "senderName": "John ",
+          "status": "delivered",
+          "text": "Testing",
+          "type": "text"
+        },
+        "msg_1773656326018_r0cp77": {
+          "createdAt": 1773656326018,
+          "id": "msg_1773656326018_r0cp77",
+          "roomId": "room_8096448937_9705431557",
+          "senderId": "1773656214890",
+          "senderName": "N",
+          "status": "delivered",
+          "text": "Hi",
+          "type": "text"
+        },
+        "msg_1773656390545_v98utz": {
+          "createdAt": 1773656390545,
+          "id": "msg_1773656390545_v98utz",
+          "roomId": "room_8096448937_9705431557",
+          "senderId": "1773656214890",
+          "senderName": "N",
+          "status": "delivered",
+          "text": "Hi",
+          "type": "text"
+        }
+      }
+    }
+  },
+  "govt_districts": {
+    "dist_ADL": {
+      "collector": "08732-222101",
+      "districtCode": "ADL",
+      "ecr": "08732-222100",
+      "hq": "Adilabad",
+      "id": "dist_ADL",
+      "lat": 19.664,
+      "lng": 78.532,
+      "name": "Adilabad",
+      "zone": "North West"
+    },
+    "dist_BHD": {
+      "collector": "08744-242101",
+      "districtCode": "BHD",
+      "ecr": "08744-242100",
+      "hq": "Kothagudem",
+      "id": "dist_BHD",
+      "lat": 17.5485,
+      "lng": 80.6207,
+      "name": "Bhadradri Kothagudem",
+      "zone": "South East"
+    },
+    "dist_GAD": {
+      "collector": "08546-221101",
+      "districtCode": "GAD",
+      "ecr": "08546-221100",
+      "hq": "Gadwal",
+      "id": "dist_GAD",
+      "lat": 16.2337,
+      "lng": 77.802,
+      "name": "Gadwal (Jogulamba)",
+      "zone": "South West"
+    },
+    "dist_HYD": {
+      "collector": "040-23400421",
+      "districtCode": "HYD",
+      "ecr": "040-23450020",
+      "hq": "Hyderabad",
+      "id": "dist_HYD",
+      "lat": 17.385,
+      "lng": 78.4867,
+      "name": "Hyderabad",
+      "zone": "Central"
+    },
+    "dist_JAN": {
+      "collector": "08708-221101",
+      "districtCode": "JAN",
+      "ecr": "08708-221100",
+      "hq": "Jangaon",
+      "id": "dist_JAN",
+      "lat": 17.7218,
+      "lng": 79.153,
+      "name": "Jangaon",
+      "zone": "North East"
+    },
+    "dist_JAY": {
+      "collector": "08719-222101",
+      "districtCode": "JAY",
+      "ecr": "08719-222100",
+      "hq": "Bhupalpally",
+      "id": "dist_JAY",
+      "lat": 18.4378,
+      "lng": 79.8537,
+      "name": "Jayashankar Bhupalpally",
+      "zone": "North East"
+    },
+    "dist_KAM": {
+      "collector": "08468-222101",
+      "districtCode": "KAM",
+      "ecr": "08468-222100",
+      "hq": "Kamareddy",
+      "id": "dist_KAM",
+      "lat": 18.3209,
+      "lng": 78.3418,
+      "name": "Kamareddy",
+      "zone": "North West"
+    },
+    "dist_KAR": {
+      "collector": "0878-2244101",
+      "districtCode": "KAR",
+      "ecr": "0878-2244100",
+      "hq": "Karimnagar",
+      "id": "dist_KAR",
+      "lat": 18.4386,
+      "lng": 79.1288,
+      "name": "Karimnagar",
+      "zone": "North"
+    },
+    "dist_KHM": {
+      "collector": "08742-223100",
+      "districtCode": "KHM",
+      "ecr": "08742-223789",
+      "hq": "Khammam",
+      "id": "dist_KHM",
+      "lat": 17.2473,
+      "lng": 80.1514,
+      "name": "Khammam",
+      "zone": "South East"
+    },
+    "dist_KOM": {
+      "collector": "08734-231101",
+      "districtCode": "KOM",
+      "ecr": "08734-231100",
+      "hq": "Asifabad",
+      "id": "dist_KOM",
+      "lat": 19.3617,
+      "lng": 79.2791,
+      "name": "Komaram Bheem Asifabad",
+      "zone": "North West"
+    },
+    "dist_MAN": {
+      "collector": "08736-222101",
+      "districtCode": "MAN",
+      "ecr": "08736-222100",
+      "hq": "Mancherial",
+      "id": "dist_MAN",
+      "lat": 18.8718,
+      "lng": 79.4565,
+      "name": "Mancherial",
+      "zone": "North East"
+    },
+    "dist_MED": {
+      "collector": "040-27240012",
+      "districtCode": "MED",
+      "ecr": "040-27240270",
+      "hq": "Medchal",
+      "id": "dist_MED",
+      "lat": 17.5269,
+      "lng": 78.5429,
+      "name": "Medchal-Malkajgiri",
+      "zone": "Central"
+    },
+    "dist_MHB": {
+      "collector": "08716-222101",
+      "districtCode": "MHB",
+      "ecr": "08716-222100",
+      "hq": "Mahabubabad",
+      "id": "dist_MHB",
+      "lat": 17.601,
+      "lng": 80.0058,
+      "name": "Mahabubabad",
+      "zone": "South East"
+    },
+    "dist_MHN": {
+      "collector": "08542-227101",
+      "districtCode": "MHN",
+      "ecr": "08542-227100",
+      "hq": "Mahabubnagar",
+      "id": "dist_MHN",
+      "lat": 16.7374,
+      "lng": 77.9891,
+      "name": "Mahabubnagar",
+      "zone": "South West"
+    },
+    "dist_MUL": {
+      "collector": "08719-252101",
+      "districtCode": "MUL",
+      "ecr": "08719-252100",
+      "hq": "Mulugu",
+      "id": "dist_MUL",
+      "lat": 18.1917,
+      "lng": 80.0625,
+      "name": "Mulugu",
+      "zone": "North East"
+    },
+    "dist_NAG": {
+      "collector": "08543-275101",
+      "districtCode": "NAG",
+      "ecr": "08543-275100",
+      "hq": "Nagarkurnool",
+      "id": "dist_NAG",
+      "lat": 16.4801,
+      "lng": 78.324,
+      "name": "Nagarkurnool",
+      "zone": "South West"
+    },
+    "dist_NAL": {
+      "collector": "08682-222100",
+      "districtCode": "NAL",
+      "ecr": "08682-222456",
+      "hq": "Nalgonda",
+      "id": "dist_NAL",
+      "lat": 17.0576,
+      "lng": 79.2671,
+      "name": "Nalgonda",
+      "zone": "South"
+    },
+    "dist_NIR": {
+      "collector": "08734-221101",
+      "districtCode": "NIR",
+      "ecr": "08734-221100",
+      "hq": "Nirmal",
+      "id": "dist_NIR",
+      "lat": 19.096,
+      "lng": 78.3418,
+      "name": "Nirmal",
+      "zone": "North West"
+    },
+    "dist_NIZ": {
+      "collector": "08462-222101",
+      "districtCode": "NIZ",
+      "ecr": "08462-222100",
+      "hq": "Nizamabad",
+      "id": "dist_NIZ",
+      "lat": 18.6725,
+      "lng": 78.094,
+      "name": "Nizamabad",
+      "zone": "North West"
+    },
+    "dist_NKT": {
+      "collector": "08543-221101",
+      "districtCode": "NKT",
+      "ecr": "08543-221100",
+      "hq": "Narayanpet",
+      "id": "dist_NKT",
+      "lat": 16.7387,
+      "lng": 77.4942,
+      "name": "Narayanpet",
+      "zone": "South West"
+    },
+    "dist_PED": {
+      "collector": "08728-222101",
+      "districtCode": "PED",
+      "ecr": "08728-222100",
+      "hq": "Peddapalli",
+      "id": "dist_PED",
+      "lat": 18.6096,
+      "lng": 79.3814,
+      "name": "Peddapalli",
+      "zone": "North"
+    },
+    "dist_RR": {
+      "collector": "040-23387500",
+      "districtCode": "RR",
+      "ecr": "040-24221105",
+      "hq": "Hyderabad",
+      "id": "dist_RR",
+      "lat": 17.2403,
+      "lng": 78.2761,
+      "name": "Ranga Reddy",
+      "zone": "Central"
+    },
+    "dist_SAN": {
+      "collector": "08455-272100",
+      "districtCode": "SAN",
+      "ecr": "08455-272034",
+      "hq": "Sangareddy",
+      "id": "dist_SAN",
+      "lat": 17.6239,
+      "lng": 78.0927,
+      "name": "Sangareddy",
+      "zone": "North West"
+    },
+    "dist_SID": {
+      "collector": "08457-222100",
+      "districtCode": "SID",
+      "ecr": "08457-222166",
+      "hq": "Siddipet",
+      "id": "dist_SID",
+      "lat": 18.1018,
+      "lng": 78.852,
+      "name": "Siddipet",
+      "zone": "North"
+    },
+    "dist_SIR": {
+      "collector": "08724-222101",
+      "districtCode": "SIR",
+      "ecr": "08724-222100",
+      "hq": "Sircilla",
+      "id": "dist_SIR",
+      "lat": 18.3859,
+      "lng": 78.8351,
+      "name": "Rajanna Sircilla",
+      "zone": "North"
+    },
+    "dist_SUR": {
+      "collector": "08684-222101",
+      "districtCode": "SUR",
+      "ecr": "08684-222100",
+      "hq": "Suryapet",
+      "id": "dist_SUR",
+      "lat": 17.1431,
+      "lng": 79.6218,
+      "name": "Suryapet",
+      "zone": "South"
+    },
+    "dist_VIK": {
+      "collector": "08411-222101",
+      "districtCode": "VIK",
+      "ecr": "08411-222100",
+      "hq": "Vikarabad",
+      "id": "dist_VIK",
+      "lat": 17.3366,
+      "lng": 77.902,
+      "name": "Vikarabad",
+      "zone": "Central"
+    },
+    "dist_WAN": {
+      "collector": "08545-271101",
+      "districtCode": "WAN",
+      "ecr": "08545-271100",
+      "hq": "Wanaparthy",
+      "id": "dist_WAN",
+      "lat": 16.3622,
+      "lng": 77.9086,
+      "name": "Wanaparthy",
+      "zone": "South West"
+    },
+    "dist_WAR": {
+      "collector": "0870-2420101",
+      "districtCode": "WAR",
+      "ecr": "0870-2420100",
+      "hq": "Warangal",
+      "id": "dist_WAR",
+      "lat": 18,
+      "lng": 79.58,
+      "name": "Warangal",
+      "zone": "North East"
+    },
+    "dist_WGL": {
+      "collector": "0870-2459100",
+      "districtCode": "WGL",
+      "ecr": "0870-2459191",
+      "hq": "Hanamkonda",
+      "id": "dist_WGL",
+      "lat": 17.9784,
+      "lng": 79.5941,
+      "name": "Hanamkonda (Warangal)",
+      "zone": "North East"
+    },
+    "dist_YAD": {
+      "collector": "08686-222100",
+      "districtCode": "YAD",
+      "ecr": "08686-222333",
+      "hq": "Bhongir",
+      "id": "dist_YAD",
+      "lat": 17.5048,
+      "lng": 78.8865,
+      "name": "Yadadri Bhuvanagiri",
+      "zone": "Central"
+    }
+  },
+  "govt_rescue_teams": {
+    "team_108": {
+      "capabilities": [
+        "Emergency Medical",
+        "Ambulance",
+        "Trauma Care",
+        "Disaster Medical Response"
+      ],
+      "commandant": "GVK EMRI",
+      "contact": "108",
+      "coverageStates": [
+        "Telangana"
+      ],
+      "headquarters": "Hyderabad, Telangana",
+      "id": "team_108",
+      "lat": 17.3616,
+      "lng": 78.4747,
+      "name": "Emergency Medical Services — 108 Ambulance",
+      "totalTeams": 936,
+      "type": "Medical",
+      "website": "https://108.co.in"
+    },
+    "team_FIRE": {
+      "capabilities": [
+        "Fire Fighting",
+        "Rescue",
+        "Flood Response",
+        "Road Accidents"
+      ],
+      "commandant": "Director General, Fire Services",
+      "contact": "101",
+      "coverageStates": [
+        "Telangana"
+      ],
+      "headquarters": "Fire Services HQ, Nampally, Hyderabad",
+      "id": "team_FIRE",
+      "lat": 17.3841,
+      "lng": 78.4564,
+      "name": "Telangana State Fire & Emergency Services",
+      "totalTeams": 142,
+      "type": "Fire & Rescue",
+      "website": "https://fire.telangana.gov.in"
+    },
+    "team_NDRF_10": {
+      "capabilities": [
+        "Flood Rescue",
+        "Earthquake",
+        "Building Collapse",
+        "Chemical",
+        "Medical First Response"
+      ],
+      "commandant": "As per current posting (rotate annually)",
+      "contact": "9868260300",
+      "coverageStates": [
+        "Telangana",
+        "Andhra Pradesh",
+        "Tamil Nadu",
+        "Kerala"
+      ],
+      "headquarters": "Tambaram, Chennai, Tamil Nadu",
+      "id": "team_NDRF_10",
+      "lat": 12.9249,
+      "lng": 80.1,
+      "name": "10th NDRF Battalion",
+      "totalTeams": 44,
+      "type": "NDRF",
+      "website": "https://ndrf.gov.in"
+    },
+    "team_SDRF_TG": {
+      "capabilities": [
+        "Flood Rescue",
+        "Search & Rescue",
+        "Medical Aid",
+        "Evacuation"
+      ],
+      "commandant": "Director General of Police, TSPolice",
+      "contact": "040-23450020",
+      "coverageStates": [
+        "Telangana"
+      ],
+      "headquarters": "Hakimpet, Hyderabad, Telangana",
+      "id": "team_SDRF_TG",
+      "lat": 17.4929,
+      "lng": 78.5372,
+      "name": "Telangana SDRF (State Disaster Response Force)",
+      "totalTeams": 20,
+      "type": "SDRF",
+      "website": "https://tgpolice.gov.in"
+    },
+    "team_TSDMA": {
+      "capabilities": [
+        "Coordination",
+        "Command & Control",
+        "Public Alerts",
+        "Resource Management"
+      ],
+      "commandant": "Managing Director, TSDMA",
+      "contact": "1800-599-4277",
+      "coverageStates": [
+        "Telangana"
+      ],
+      "headquarters": "Errum Manzil, Hyderabad, Telangana",
+      "id": "team_TSDMA",
+      "lat": 17.4142,
+      "lng": 78.4683,
+      "name": "TSDMA State EOC — Hyderabad",
+      "totalTeams": 0,
+      "type": "EOC",
+      "website": "https://tsdma.telangana.gov.in"
+    }
+  },
+  "needss": {
+    "1772473743057_pj0ej9": {
+      "fulfilled": false,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.825965,
+        "longitude": 78.1387369
+      },
+      "id": "1772473743057_pj0ej9",
+      "needs": [
+        "food"
+      ],
+      "peopleCount": 1,
+      "reportedAt": 1772473743057,
+      "synced": true,
+      "userId": "1772446626805",
+      "userName": "Abhinav"
+    },
+    "1772602532873_ngtpse": {
+      "fulfilled": false,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8237025,
+        "longitude": 78.1423199
+      },
+      "id": "1772602532873_ngtpse",
+      "needs": [
+        "water"
+      ],
+      "peopleCount": 3,
+      "reportedAt": 1772602532873,
+      "synced": true,
+      "userId": "1772446626805",
+      "userName": "Abhinav"
+    },
+    "1772621017805_6p7lxq": {
+      "fulfilled": false,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8234949,
+        "longitude": 78.1427393
+      },
+      "id": "1772621017805_6p7lxq",
+      "needs": [
+        "water"
+      ],
+      "peopleCount": 3,
+      "reportedAt": 1772621017805,
+      "synced": true,
+      "userId": "1772446626805",
+      "userName": "Abhinav"
+    },
+    "1773133082311_3ea2xh": {
+      "fulfilled": false,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8236691,
+        "longitude": 78.142288
+      },
+      "id": "1773133082311_3ea2xh",
+      "needs": [
+        "food"
+      ],
+      "peopleCount": 5,
+      "reportedAt": 1773133082311,
+      "synced": true,
+      "userId": "guest_1773132899886",
+      "userName": "Abhinav"
+    },
+    "1773133098320_kp5abl": {
+      "fulfilled": false,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8236691,
+        "longitude": 78.142288
+      },
+      "id": "1773133098320_kp5abl",
+      "needs": [
+        "water"
+      ],
+      "peopleCount": 3,
+      "reportedAt": 1773133098320,
+      "synced": true,
+      "userId": "guest_1773132899886",
+      "userName": "Abhinav"
+    },
+    "1773133145192_orz44h": {
+      "fulfilled": false,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8236691,
+        "longitude": 78.142288
+      },
+      "id": "1773133145192_orz44h",
+      "needs": [
+        "water"
+      ],
+      "peopleCount": 3,
+      "reportedAt": 1773133145192,
+      "synced": true,
+      "userId": "guest_1773132899886",
+      "userName": "Abhinav"
+    },
+    "1773133158668_l7vwtz": {
+      "fulfilled": false,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8236691,
+        "longitude": 78.142288
+      },
+      "id": "1773133158668_l7vwtz",
+      "needs": [
+        "food"
+      ],
+      "peopleCount": 3,
+      "reportedAt": 1773133158668,
+      "synced": true,
+      "userId": "guest_1773132899886",
+      "userName": "Abhinav"
+    }
+  },
+  "relief_camps": {
+    "camp_ADL_001": {
+      "address": "ITDA Office, Adilabad – 504001",
+      "capacity": 800,
+      "contactNumber": "08732-222100",
+      "currentOccupancy": 0,
+      "district": "Adilabad",
+      "id": "camp_ADL_001",
+      "isActive": true,
+      "isGovtRegistered": true,
+      "latitude": 19.664,
+      "longitude": 78.532,
+      "managedBy": "District Collector Adilabad",
+      "name": "Adilabad Tribal Relief Centre",
+      "resources": [
+        "Food",
+        "Water",
+        "Shelter",
+        "Clothing",
+        "Baby Supplies"
+      ],
+      "updatedAt": 1772469349211,
+      "zone": "North West"
+    },
+    "camp_HYD_001": {
+      "address": "Gachibowli, Hyderabad – 500032",
+      "capacity": 3000,
+      "contactNumber": "040-23112233",
+      "currentOccupancy": 0,
+      "district": "Hyderabad",
+      "id": "camp_HYD_001",
+      "isActive": true,
+      "isGovtRegistered": true,
+      "latitude": 17.4401,
+      "longitude": 78.3489,
+      "managedBy": "GHMC",
+      "name": "Gachibowli Indoor Stadium Relief Centre",
+      "resources": [
+        "Food",
+        "Water",
+        "Medical Aid",
+        "Shelter",
+        "Sanitation"
+      ],
+      "updatedAt": 1772469349211,
+      "zone": "Central"
+    },
+    "camp_HYD_002": {
+      "address": "Bison Polo Ground, Secunderabad – 500003",
+      "capacity": 5000,
+      "contactNumber": "040-27801234",
+      "currentOccupancy": 0,
+      "district": "Hyderabad",
+      "id": "camp_HYD_002",
+      "isActive": true,
+      "isGovtRegistered": true,
+      "latitude": 17.4399,
+      "longitude": 78.4983,
+      "managedBy": "Army / District Collector",
+      "name": "Parade Ground Emergency Shelter, Secunderabad",
+      "resources": [
+        "Food",
+        "Water",
+        "Shelter",
+        "Charging Points",
+        "Medical Aid",
+        "Clothing"
+      ],
+      "updatedAt": 1772469349211,
+      "zone": "Central"
+    },
+    "camp_KAR_001": {
+      "address": "Near Karimnagar Bus Stand, Karimnagar – 505001",
+      "capacity": 1200,
+      "contactNumber": "0878-2244100",
+      "currentOccupancy": 0,
+      "district": "Karimnagar",
+      "id": "camp_KAR_001",
+      "isActive": true,
+      "isGovtRegistered": true,
+      "latitude": 18.4386,
+      "longitude": 79.1288,
+      "managedBy": "District Collector Karimnagar",
+      "name": "Karimnagar District Flood Relief Camp",
+      "resources": [
+        "Food",
+        "Water",
+        "Shelter",
+        "Medical Aid"
+      ],
+      "updatedAt": 1772469349211,
+      "zone": "North"
+    },
+    "camp_KHM_001": {
+      "address": "Nehru Stadium, Khammam – 507001",
+      "capacity": 1500,
+      "contactNumber": "08742-223789",
+      "currentOccupancy": 0,
+      "district": "Khammam",
+      "id": "camp_KHM_001",
+      "isActive": true,
+      "isGovtRegistered": true,
+      "latitude": 17.2473,
+      "longitude": 80.1514,
+      "managedBy": "District Collector Khammam",
+      "name": "Nehru Stadium Emergency Shelter, Khammam",
+      "resources": [
+        "Food",
+        "Water",
+        "Shelter",
+        "Clothing"
+      ],
+      "updatedAt": 1772469349211,
+      "zone": "South East"
+    },
+    "camp_MHN_001": {
+      "address": "Old Bus Stand Area, Mahabubnagar – 509001",
+      "capacity": 1000,
+      "contactNumber": "08542-227100",
+      "currentOccupancy": 0,
+      "district": "Mahabubnagar",
+      "id": "camp_MHN_001",
+      "isActive": true,
+      "isGovtRegistered": true,
+      "latitude": 16.7374,
+      "longitude": 77.9891,
+      "managedBy": "District Collector Mahabubnagar",
+      "name": "Mahabubnagar District Shelter",
+      "resources": [
+        "Food",
+        "Water",
+        "Shelter",
+        "Medical Aid"
+      ],
+      "updatedAt": 1772469349211,
+      "zone": "South West"
+    },
+    "camp_NAL_001": {
+      "address": "District Collectorate, Nalgonda – 508001",
+      "capacity": 2000,
+      "contactNumber": "08682-222456",
+      "currentOccupancy": 0,
+      "district": "Nalgonda",
+      "id": "camp_NAL_001",
+      "isActive": true,
+      "isGovtRegistered": true,
+      "latitude": 17.0576,
+      "longitude": 79.2671,
+      "managedBy": "District Collector Nalgonda",
+      "name": "Nalgonda Collectorate Relief Base",
+      "resources": [
+        "Food",
+        "Water",
+        "Medical Aid",
+        "Shelter",
+        "Baby Supplies"
+      ],
+      "updatedAt": 1772469349211,
+      "zone": "South"
+    },
+    "camp_RR_001": {
+      "address": "Near LB Nagar Metro, Ranga Reddy – 500074",
+      "capacity": 1000,
+      "contactNumber": "040-24012222",
+      "currentOccupancy": 0,
+      "district": "Ranga Reddy",
+      "id": "camp_RR_001",
+      "isActive": true,
+      "isGovtRegistered": true,
+      "latitude": 17.3469,
+      "longitude": 78.5521,
+      "managedBy": "District Collector RR",
+      "name": "LB Nagar Relief Centre",
+      "resources": [
+        "Food",
+        "Water",
+        "Shelter"
+      ],
+      "updatedAt": 1772469349211,
+      "zone": "Central"
+    },
+    "camp_WGL_001": {
+      "address": "ITDA Campus, Hanamkonda, Warangal – 506004",
+      "capacity": 2500,
+      "contactNumber": "0870-2459191",
+      "currentOccupancy": 0,
+      "district": "Hanamkonda (Warangal)",
+      "id": "camp_WGL_001",
+      "isActive": true,
+      "isGovtRegistered": true,
+      "latitude": 17.9784,
+      "longitude": 79.5294,
+      "managedBy": "District Collector Warangal",
+      "name": "Warangal ITDA Coordination Centre",
+      "resources": [
+        "Food",
+        "Water",
+        "Medical Aid",
+        "Shelter",
+        "Blankets",
+        "Charging Points"
+      ],
+      "updatedAt": 1772469349211,
+      "zone": "North East"
+    }
+  },
+  "resources": {
+    "1773133130275_k7uhwi": {
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8236691,
+        "longitude": 78.142288
+      },
+      "id": "1773133130275_k7uhwi",
+      "offeredAt": 1773133130275,
+      "resources": [
+        "food"
+      ],
+      "synced": true,
+      "userId": "guest_1773132899886",
+      "userName": "Abhinav"
+    }
+  },
+  "soss": {
+    "1772449322665_4lh8fq": {
+      "activatedAt": 1772449322665,
+      "contactsNotified": [
+        "2230"
+      ],
+      "deactivatedAt": 1772449417279,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8236985,
+        "longitude": 78.142325
+      },
+      "id": "1772449322665_4lh8fq",
+      "isActive": false,
+      "synced": true,
+      "userId": "1772446626805",
+      "userName": "Abhinav"
+    },
+    "1772451644950_zkssqp": {
+      "activatedAt": 1772451644950,
+      "contactsNotified": [
+        "2230"
+      ],
+      "deactivatedAt": 1772451705303,
+      "gps": {
+        "latitude": 0,
+        "longitude": 0
+      },
+      "id": "1772451644950_zkssqp",
+      "isActive": false,
+      "synced": true,
+      "userId": "1772446626805",
+      "userName": "Abhinav"
+    },
+    "1772451787835_v3h9du": {
+      "activatedAt": 1772451787835,
+      "contactsNotified": [
+        "2230"
+      ],
+      "deactivatedAt": 1772451845033,
+      "gps": {
+        "latitude": 0,
+        "longitude": 0
+      },
+      "id": "1772451787835_v3h9du",
+      "isActive": false,
+      "synced": true,
+      "userId": "1772446626805",
+      "userName": "Abhinav"
+    },
+    "1772473682790_effphb": {
+      "activatedAt": 1772473682790,
+      "contactsNotified": [
+        "2230"
+      ],
+      "deactivatedAt": 1772473784155,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.825965,
+        "longitude": 78.1387369
+      },
+      "id": "1772473682790_effphb",
+      "isActive": false,
+      "synced": true,
+      "userId": "1772446626805",
+      "userName": "Abhinav"
+    },
+    "1772518395020_o46ktm": {
+      "activatedAt": 1772518395020,
+      "contactsNotified": [
+        "2230"
+      ],
+      "deactivatedAt": 1772518423307,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8259243,
+        "longitude": 78.1387019
+      },
+      "id": "1772518395020_o46ktm",
+      "isActive": false,
+      "synced": true,
+      "userId": "1772446626805",
+      "userName": "Abhinav"
+    },
+    "1772519246372_9sjh27": {
+      "activatedAt": 1772519246372,
+      "contactsNotified": [
+        "2230"
+      ],
+      "deactivatedAt": 1772519421759,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8259243,
+        "longitude": 78.1387019
+      },
+      "id": "1772519246372_9sjh27",
+      "isActive": false,
+      "synced": true,
+      "userId": "1772446626805",
+      "userName": "Abhinav"
+    },
+    "1772519834941_gf72ye": {
+      "activatedAt": 1772519834941,
+      "contactsNotified": [
+        "2230"
+      ],
+      "deactivatedAt": 1772602415476,
+      "govtAction": {
+        "dispatchedAt": 1772519868061,
+        "estimatedArrival": "10mins",
+        "message": "Coming to your place dont panic",
+        "sosId": "1772519834941_gf72ye",
+        "status": "rescue_dispatched"
+      },
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8259243,
+        "longitude": 78.1387019
+      },
+      "id": "1772519834941_gf72ye",
+      "isActive": false,
+      "locationTrail": [
+        {
+          "accuracy": 100,
+          "altitude": 509.9000244140625,
+          "latitude": 16.8259243,
+          "longitude": 78.1387019,
+          "timestamp": 1772518363184
+        },
+        {
+          "accuracy": 100,
+          "altitude": 509.9000244140625,
+          "latitude": 16.8259243,
+          "longitude": 78.1387019,
+          "timestamp": 1772519245038
+        },
+        {
+          "accuracy": 100,
+          "altitude": 509.9000244140625,
+          "latitude": 16.8259243,
+          "longitude": 78.1387019,
+          "timestamp": 1772519833526
+        }
+      ],
+      "resolvedBy": "dashboard",
+      "synced": true,
+      "userId": "1772446626805",
+      "userName": "Abhinav"
+    },
+    "1772519895541_k7goro": {
+      "activatedAt": 1772519895541,
+      "contactsNotified": [
+        "2230"
+      ],
+      "deactivatedAt": 1772519947521,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8259243,
+        "longitude": 78.1387019
+      },
+      "id": "1772519895541_k7goro",
+      "isActive": false,
+      "synced": true,
+      "userId": "1772446626805",
+      "userName": "Abhinav"
+    },
+    "1772602481769_883pfd": {
+      "activatedAt": 1772602481769,
+      "contactsNotified": [
+        "2230"
+      ],
+      "deactivatedAt": 1772602662845,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8237025,
+        "longitude": 78.1423199
+      },
+      "id": "1772602481769_883pfd",
+      "isActive": false,
+      "synced": true,
+      "userId": "1772446626805",
+      "userName": "Abhinav"
+    },
+    "1772620886608_t2hll4": {
+      "activatedAt": 1772620886608,
+      "contactsNotified": [
+        "2230"
+      ],
+      "deactivatedAt": 1772620900197,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8234949,
+        "longitude": 78.1427393
+      },
+      "id": "1772620886608_t2hll4",
+      "isActive": false,
+      "locationTrail": [
+        {
+          "accuracy": 100,
+          "altitude": 525.7000122070312,
+          "latitude": 16.8234949,
+          "longitude": 78.1427393,
+          "timestamp": 1772620884378
+        }
+      ],
+      "resolvedBy": "dashboard",
+      "synced": true,
+      "userId": "1772446626805",
+      "userName": "Abhinav"
+    },
+    "1772620904316_qa5prm": {
+      "activatedAt": 1772620904316,
+      "contactsNotified": [
+        "2230"
+      ],
+      "deactivatedAt": 1772621069556,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8234949,
+        "longitude": 78.1427393
+      },
+      "id": "1772620904316_qa5prm",
+      "isActive": false,
+      "synced": true,
+      "userId": "1772446626805",
+      "userName": "Abhinav"
+    },
+    "1772697819518_5y84km": {
+      "activatedAt": 1772697819518,
+      "contactsNotified": [
+        "2230"
+      ],
+      "deactivatedAt": 1772697846532,
+      "gps": {
+        "latitude": 16.8235799,
+        "longitude": 78.14259
+      },
+      "id": "1772697819518_5y84km",
+      "isActive": false,
+      "synced": true,
+      "userId": "guest_1772697612594",
+      "userName": "Abhinav"
+    },
+    "1772697850578_lb3e8i": {
+      "activatedAt": 1772697850578,
+      "contactsNotified": [
+        "2230"
+      ],
+      "deactivatedAt": 1772701033458,
+      "gps": {
+        "latitude": 16.8235799,
+        "longitude": 78.14259
+      },
+      "id": "1772697850578_lb3e8i",
+      "isActive": false,
+      "resolvedBy": "dashboard",
+      "synced": true,
+      "userId": "guest_1772697612594",
+      "userName": "Abhinav"
+    },
+    "1772701001206_sjourm": {
+      "activatedAt": 1772701001206,
+      "contactsNotified": [
+        "2230",
+        "3783"
+      ],
+      "deactivatedAt": 1772701040938,
+      "gps": {
+        "latitude": 16.8236715,
+        "longitude": 78.1422786
+      },
+      "id": "1772701001206_sjourm",
+      "isActive": false,
+      "synced": true,
+      "userId": "guest_1772697612594",
+      "userName": "Abhinav"
+    },
+    "1772701048739_xdv6w6": {
+      "activatedAt": 1772701048739,
+      "contactsNotified": [
+        "2230",
+        "3783"
+      ],
+      "deactivatedAt": 1772703334378,
+      "gps": {
+        "latitude": 16.8236715,
+        "longitude": 78.1422786
+      },
+      "id": "1772701048739_xdv6w6",
+      "isActive": false,
+      "resolvedBy": "dashboard",
+      "synced": true,
+      "userId": "guest_1772697612594",
+      "userName": "Abhinav"
+    },
+    "1772787846337_taus7e": {
+      "activatedAt": 1772787846337,
+      "contactsNotified": [
+        "2834"
+      ],
+      "deactivatedAt": 1772787893314,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8236733,
+        "longitude": 78.1422774
+      },
+      "id": "1772787846337_taus7e",
+      "isActive": false,
+      "synced": true,
+      "userId": "guest_1772700596577",
+      "userName": "Snehil"
+    },
+    "1773121173866_kp4obr": {
+      "activatedAt": 1773121173866,
+      "contactsNotified": [
+        "2230",
+        "3783"
+      ],
+      "deactivatedAt": 1773121222939,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8236727,
+        "longitude": 78.1422814
+      },
+      "id": "1773121173866_kp4obr",
+      "isActive": false,
+      "synced": true,
+      "userId": "guest_1772697612594",
+      "userName": "Abhinav"
+    },
+    "1773124490874_1wiy0a": {
+      "activatedAt": 1773124490874,
+      "contactsNotified": [
+        "2230",
+        "3783"
+      ],
+      "deactivatedAt": 1773124550762,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8236715,
+        "longitude": 78.1422844
+      },
+      "id": "1773124490874_1wiy0a",
+      "isActive": false,
+      "synced": true,
+      "userId": "guest_1772697612594",
+      "userName": "Abhinav"
+    },
+    "1773129619895_x8eaqs": {
+      "activatedAt": 1773129619895,
+      "contactsNotified": [
+        "2834"
+      ],
+      "deactivatedAt": 1773129655463,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8236589,
+        "longitude": 78.1422289
+      },
+      "id": "1773129619895_x8eaqs",
+      "isActive": false,
+      "synced": true,
+      "userId": "guest_1772700596577",
+      "userName": "Snehil"
+    },
+    "1773132900976_kbjxcb": {
+      "activatedAt": 1773132900976,
+      "contactsNotified": [
+        "2834"
+      ],
+      "deactivatedAt": 1774506769907,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8236804,
+        "longitude": 78.1422386
+      },
+      "id": "1773132900976_kbjxcb",
+      "isActive": false,
+      "resolvedBy": "dashboard",
+      "synced": true,
+      "userId": "guest_1772700596577",
+      "userName": "Snehil"
+    },
+    "1773132933795_bf5gzn": {
+      "activatedAt": 1773132933795,
+      "contactsNotified": [
+        "2230",
+        "3783"
+      ],
+      "deactivatedAt": 1773132979175,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8236691,
+        "longitude": 78.142288
+      },
+      "id": "1773132933795_bf5gzn",
+      "isActive": false,
+      "synced": true,
+      "userId": "guest_1773132899886",
+      "userName": "Abhinav"
+    },
+    "1773133138890_2i3en4": {
+      "activatedAt": 1773133138890,
+      "contactsNotified": [
+        "2230",
+        "3783"
+      ],
+      "deactivatedAt": 1773133213817,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8236691,
+        "longitude": 78.142288
+      },
+      "id": "1773133138890_2i3en4",
+      "isActive": false,
+      "synced": true,
+      "userId": "guest_1773132899886",
+      "userName": "Abhinav"
+    },
+    "1773656439143_x6n4g8": {
+      "activatedAt": 1773656439143,
+      "contactsNotified": [
+        "3536"
+      ],
+      "deactivatedAt": 1773656455564,
+      "gps": {
+        "address": "R4GQ+QHW, Raipalle, Telangana 509202, India",
+        "latitude": 16.8236697,
+        "longitude": 78.142233
+      },
+      "id": "1773656439143_x6n4g8",
+      "isActive": false,
+      "synced": true,
+      "userId": "1773656214890",
+      "userName": "N"
+    }
+  },
+  "test": {
+    "message": "SafeConnect Firebase connected!",
+    "time": 1772445651760
+  }
+}

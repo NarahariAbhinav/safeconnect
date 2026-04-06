@@ -52,30 +52,34 @@ function packetToActivity(pkt: MeshPacket): Pick<ActivityEntry, 'icon' | 'messag
             return { icon: '🆘', message: 'Emergency alert received through the mesh', color: C.red };
         case 'chat':
             return { icon: '💬', message: 'A message was relayed through the mesh', color: C.blue };
-        case 'location':
-            return { icon: '📍', message: 'Someone shared their location through the mesh', color: C.orange };
+        case 'ping':
+            return { icon: '🧪', message: 'Someone sent a test ping through the mesh', color: C.orange };
         default:
             return { icon: '📡', message: 'Signal received from a nearby device', color: C.green };
     }
 }
 
 const MeshStatusScreen: React.FC<Props> = ({ navigation, route }) => {
-    const userId  = route.params?.userId   ?? 'anonymous';
+    const userId = route.params?.userId ?? 'anonymous';
     const userName = route.params?.userName ?? 'User';
 
     // Initialise from live service state so navigating back doesn't reset the button
     const [bleReady, setBleReady] = useState<boolean | null>(() => permissionService.isBLEReady());
-    const [scanning, setScanning]  = useState(() => permissionService.isBLEReady());
-    const [peerCount, setPeerCount] = useState(0);
-    const [activity, setActivity]  = useState<ActivityEntry[]>([]);
+    const [scanning, setScanning] = useState(() => permissionService.isBLEReady());
+    const [peerCount, setPeerCount] = useState(() => bleMeshService.getPeerCount());
+    const [connectedPeers, setConnectedPeers] = useState<{ id: string; name: string }[]>(
+        () => bleMeshService.getConnectedPeers()
+    );
+    const [relayCount, setRelayCount] = useState(0); // packets relayed through this device
+    const [activity, setActivity] = useState<ActivityEntry[]>([]);
 
     // Connection popup — shown like a Bluetooth pairing notification
     const [connPopup, setConnPopup] = useState<{
         visible: boolean; icon: string; title: string; subtitle: string; color: string;
     }>({ visible: false, icon: '', title: '', subtitle: '', color: C.blue });
 
-    const peerPollRef   = useRef<ReturnType<typeof setInterval> | null>(null);
-    const popupTimerRef = useRef<ReturnType<typeof setTimeout>  | null>(null);
+    const peerPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const popupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const showConnPopup = useCallback((icon: string, title: string, subtitle: string, color: string) => {
         if (popupTimerRef.current) clearTimeout(popupTimerRef.current);
@@ -97,6 +101,9 @@ const MeshStatusScreen: React.FC<Props> = ({ navigation, route }) => {
         const { icon, message, color } = packetToActivity(pkt);
         addActivity(icon, message, color);
         setPeerCount(bleMeshService.getPeerCount());
+        setConnectedPeers(bleMeshService.getConnectedPeers());
+        // Count packets relayed through this device (hops > 0 means we relayed it)
+        if (pkt.hops > 0) setRelayCount(prev => prev + 1);
     }, []);
 
     // ── Subscribe to BLE connection events (Bluetooth-style popups) ──
@@ -118,11 +125,13 @@ const MeshStatusScreen: React.FC<Props> = ({ navigation, route }) => {
                     showConnPopup('✅', `Connected to ${e.peerName}!`, 'You can now share emergency data offline', C.green);
                     addActivity('🔗', `Connected to ${e.peerName}`, C.green);
                     setPeerCount(bleMeshService.getPeerCount());
+                    setConnectedPeers(bleMeshService.getConnectedPeers());
                     break;
                 case 'disconnected':
                     showConnPopup('📡', `${e.peerName} left the mesh`, 'Device went out of range', C.orange);
                     addActivity('🔌', `${e.peerName} went out of range`, C.muted);
                     setPeerCount(bleMeshService.getPeerCount());
+                    setConnectedPeers(bleMeshService.getConnectedPeers());
                     break;
             }
         };
@@ -133,10 +142,11 @@ const MeshStatusScreen: React.FC<Props> = ({ navigation, route }) => {
         };
     }, [showConnPopup]);
 
-    // ── Poll peer count every 3 s while mounted ───────────────────────
+    // ── Poll peer count + names every 3 s while mounted ────────────────
     useEffect(() => {
         peerPollRef.current = setInterval(() => {
             setPeerCount(bleMeshService.getPeerCount());
+            setConnectedPeers(bleMeshService.getConnectedPeers());
         }, 3000);
         return () => {
             if (peerPollRef.current) clearInterval(peerPollRef.current);
@@ -157,6 +167,9 @@ const MeshStatusScreen: React.FC<Props> = ({ navigation, route }) => {
 
     // ── Turn mesh on ─────────────────────────────────────────────────
     const startMesh = async () => {
+        setBleReady(null); // show loading state
+        addActivity('⏳', 'Starting mesh networking...', C.blue);
+
         const ready = await permissionService.enableMesh({
             displayName: userName,
             onPacket: handlePacket,
@@ -168,6 +181,7 @@ const MeshStatusScreen: React.FC<Props> = ({ navigation, route }) => {
 
         if (ready) {
             addActivity('📡', 'Listening for nearby SafeConnect users…', C.blue);
+            setPeerCount(bleMeshService.getPeerCount());
         } else {
             addActivity('⚠️', 'Could not start mesh — check Bluetooth, Wi-Fi and Location', C.red);
         }
@@ -203,29 +217,29 @@ const MeshStatusScreen: React.FC<Props> = ({ navigation, route }) => {
     // ── Derived display values ────────────────────────────────────────
     const statusColor =
         bleReady === null ? C.orange :
-        scanning ? C.green :
-        bleReady ? C.blue : C.orange;
+            scanning ? C.green :
+                bleReady ? C.blue : C.orange;
 
     const statusEmoji =
         bleReady === null ? '⏳' :
-        scanning ? '📡' :
-        bleReady ? '✅' : '⏸️';
+            scanning ? '📡' :
+                bleReady ? '✅' : '⏸️';
 
     const statusLabel =
         bleReady === null ? 'Starting up…' :
-        scanning ? 'Active — listening for people' :
-        bleReady ? 'Ready (not yet listening)' : 'Mesh is off';
+            scanning ? 'Active — listening for people' :
+                bleReady ? 'Ready (not yet listening)' : 'Mesh is off';
 
     const statusDesc =
         bleReady === null ? 'Please wait while we set up your mesh.' :
-        scanning ? 'Your phone is sharing safety signals with nearby SafeConnect users.' :
-        bleReady ? 'Tap "Turn On Mesh" to reconnect with people nearby.' :
-        'Tap "Turn On Mesh". The app will request permissions and start nearby discovery.';
+            scanning ? 'Your phone is sharing safety signals with nearby SafeConnect users.' :
+                bleReady ? 'Tap "Turn On Mesh" to reconnect with people nearby.' :
+                    'Tap "Turn On Mesh". The app will request permissions and start nearby discovery.';
 
     const peerLabel =
         peerCount === 0 ? 'No one nearby yet' :
-        peerCount === 1 ? '1 person nearby on SafeConnect' :
-        `${peerCount} people nearby on SafeConnect`;
+            peerCount === 1 ? '1 person nearby on SafeConnect' :
+                `${peerCount} people nearby on SafeConnect`;
 
     return (
         <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
@@ -259,10 +273,12 @@ const MeshStatusScreen: React.FC<Props> = ({ navigation, route }) => {
                 <Animated.View entering={FadeInUp.duration(400).delay(60)} style={s.btnRow}>
                     {!scanning ? (
                         <TouchableOpacity
-                            style={[s.mainBtn, { backgroundColor: bleReady ? C.green : C.muted }]}
+                            style={[s.mainBtn, { backgroundColor: bleReady === null ? C.muted : C.green }]}
                             onPress={startMesh} activeOpacity={0.85}
-                            disabled={bleReady !== true}>
-                            <Text style={s.mainBtnText}>📡  Turn On Mesh</Text>
+                            disabled={bleReady === null}>
+                            <Text style={s.mainBtnText}>
+                                {bleReady === null ? '⏳  Starting…' : '📡  Turn On Mesh'}
+                            </Text>
                         </TouchableOpacity>
                     ) : (
                         <TouchableOpacity
@@ -272,6 +288,73 @@ const MeshStatusScreen: React.FC<Props> = ({ navigation, route }) => {
                         </TouchableOpacity>
                     )}
                 </Animated.View>
+
+                {/* ── Connected Peers + Hop Visualizer ── */}
+                {bleReady && connectedPeers.length > 0 && (
+                    <Animated.View entering={FadeInUp.duration(400).delay(80)} style={s.peersCard}>
+                        {/* Hop Visualizer */}
+                        <Text style={s.peersTitle}>📡 Live Mesh Map</Text>
+                        <Svg width="100%" height={120} viewBox="0 0 280 120">
+                            {/* Lines from center (You) to each peer */}
+                            {connectedPeers.slice(0, 5).map((peer, i) => {
+                                const total = Math.min(connectedPeers.length, 5);
+                                const angle = (i / total) * Math.PI * 2 - Math.PI / 2;
+                                const px = 140 + 90 * Math.cos(angle);
+                                const py = 60 + 45 * Math.sin(angle);
+                                return (
+                                    <Path
+                                        key={peer.id}
+                                        d={`M140,60 L${px},${py}`}
+                                        stroke={C.green}
+                                        strokeWidth="1.5"
+                                        strokeDasharray="4,3"
+                                        opacity={0.6}
+                                    />
+                                );
+                            })}
+                            {/* Peer nodes */}
+                            {connectedPeers.slice(0, 5).map((peer, i) => {
+                                const total = Math.min(connectedPeers.length, 5);
+                                const angle = (i / total) * Math.PI * 2 - Math.PI / 2;
+                                const px = 140 + 90 * Math.cos(angle);
+                                const py = 60 + 45 * Math.sin(angle);
+                                const label = peer.name.length > 8 ? peer.name.slice(0, 8) + '…' : peer.name;
+                                return (
+                                    <React.Fragment key={peer.id}>
+                                        <Path
+                                            d={`M${px - 18},${py - 12} h36 a6,6 0 0 1 6,6 v12 a6,6 0 0 1 -6,6 h-36 a6,6 0 0 1 -6,-6 v-12 a6,6 0 0 1 6,-6 z`}
+                                            fill={C.greenLight}
+                                            stroke={C.green}
+                                            strokeWidth="1"
+                                        />
+                                        <Path
+                                            d={`M${px},${py - 6} v0`}
+                                            stroke="none"
+                                        />
+                                    </React.Fragment>
+                                );
+                            })}
+                            {/* You — center node */}
+                            <Path d="M122,46 h36 a8,8 0 0 1 8,8 v12 a8,8 0 0 1 -8,8 h-36 a8,8 0 0 1 -8,-8 v-12 a8,8 0 0 1 8,-8 z" fill={C.green} />
+                        </Svg>
+                        {/* Peer name labels below */}
+                        <View style={s.peerNameRow}>
+                            <View style={[s.peerNamePill, { backgroundColor: C.green }]}>
+                                <Text style={[s.peerNameTxt, { color: C.white }]}>📱 You</Text>
+                            </View>
+                            {connectedPeers.map(peer => (
+                                <View key={peer.id} style={s.peerNamePill}>
+                                    <Text style={s.peerNameTxt}>🔗 {peer.name.split('-')[0]}</Text>
+                                </View>
+                            ))}
+                        </View>
+                        {relayCount > 0 && (
+                            <View style={s.relayBadge}>
+                                <Text style={s.relayBadgeTxt}>↩ {relayCount} packet{relayCount === 1 ? '' : 's'} relayed through your device</Text>
+                            </View>
+                        )}
+                    </Animated.View>
+                )}
 
                 {/* ── What is mesh? ── */}
                 <Animated.View entering={FadeInUp.duration(400).delay(100)} style={s.explainerCard}>
@@ -434,6 +517,30 @@ const s = StyleSheet.create({
     testBtnText: { fontSize: 14, fontWeight: '700', color: C.blue },
     testBtnSub: { fontSize: 11, color: C.muted, marginTop: 3 },
 
+    /* Connected peers + hop visualizer */
+    peersCard: {
+        backgroundColor: C.card, borderWidth: 1.5,
+        borderColor: C.green + '44', borderRadius: 16,
+        padding: 16, marginBottom: 14,
+    },
+    peersTitle: { fontSize: 14, fontWeight: '800', color: C.green, marginBottom: 8 },
+    peerNameRow: {
+        flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4,
+    },
+    peerNamePill: {
+        flexDirection: 'row', alignItems: 'center',
+        backgroundColor: C.greenLight, borderWidth: 1, borderColor: C.green + '44',
+        borderRadius: 20, paddingHorizontal: 12, paddingVertical: 5,
+    },
+    peerNameTxt: { fontSize: 12, fontWeight: '700', color: C.green },
+    relayBadge: {
+        marginTop: 10, backgroundColor: 'rgba(21,101,192,0.08)',
+        borderWidth: 1, borderColor: C.blue + '33',
+        borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6,
+        alignSelf: 'flex-start',
+    },
+    relayBadgeTxt: { fontSize: 11, fontWeight: '600', color: C.blue },
+
     /* Bluetooth-style connection popup */
     connPopup: {
         position: 'absolute', bottom: 20, left: 14, right: 14,
@@ -451,7 +558,7 @@ const s = StyleSheet.create({
     },
     connPopupIcon: { fontSize: 30 },
     connPopupTitle: { fontSize: 14, fontWeight: '800', lineHeight: 19 },
-    connPopupSub:   { fontSize: 12, color: C.muted, marginTop: 1 },
+    connPopupSub: { fontSize: 12, color: C.muted, marginTop: 1 },
     connPopupClose: { padding: 4, marginLeft: 4 },
 });
 

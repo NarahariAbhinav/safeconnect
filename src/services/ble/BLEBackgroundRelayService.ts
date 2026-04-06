@@ -8,6 +8,7 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { bleMeshService } from './BLEMeshService';
+import { meshChatHelper } from './MeshChatHelper';
 
 class BLEBackgroundRelayServiceClass {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -51,18 +52,38 @@ class BLEBackgroundRelayServiceClass {
 
   private async _tryRelay(): Promise<void> {
     if (this.running) return;
-    if (!bleMeshService.ready) return;
 
     this.running = true;
     try {
-      const raw = await AsyncStorage.getItem('ble_relay_queue');
-      if (!raw) return;
-      const queue: any[] = JSON.parse(raw);
-      if (!queue.length) return;
+      // 1. Drain the raw packet queue (ble_relay_queue) — only send when mesh is ready and peers exist
+      if (bleMeshService.ready && bleMeshService.getPeerCount() > 0) {
+        const raw = await AsyncStorage.getItem('ble_relay_queue');
+        if (raw) {
+          const queue: any[] = JSON.parse(raw);
+          if (queue.length) {
+            const now = Date.now();
+            const validQueue = queue.filter(p => p.ttl > now);
 
-      console.log('[Relay] Attempting to relay', queue.length, 'packet(s)...');
-      // broadcast() will send to all currently connected peers
-      await bleMeshService.broadcast(queue[0]);
+            // Cleanup expired packets
+            if (validQueue.length !== queue.length) {
+              await AsyncStorage.setItem('ble_relay_queue', JSON.stringify(validQueue));
+            }
+
+            if (validQueue.length) {
+              console.log('[Relay] Attempting to relay', validQueue.length, 'packet(s)...');
+              // Broadcast up to 5 most recent packets to avoid flooding
+              for (const pkt of validQueue.slice(-5)) {
+                await bleMeshService.broadcast(pkt);
+                await new Promise(r => setTimeout(r, 100));
+              }
+            }
+          }
+        }
+      }
+
+      // 2. Also drain MeshChatHelper queue (mesh_chat_pending)
+      // This queue stores chat messages at a higher level for retry
+      await meshChatHelper.relayPendingMessages();
     } catch (e) {
       console.warn('[Relay] Error:', (e as any)?.message);
     } finally {

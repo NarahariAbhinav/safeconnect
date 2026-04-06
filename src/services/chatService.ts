@@ -1,17 +1,27 @@
 /**
- * chatService.ts — Offline-first P2P Chat
+ * chatService.ts — Pure Offline P2P Chat
  *
- * Storage strategy:
- *  • Every message is saved to AsyncStorage IMMEDIATELY (offline-first)
- *  • When internet is available → synced to Firebase for cross-device delivery
- *  • Works like WhatsApp: 1 tick = saved locally, 2 ticks = delivered to Firebase
+ * ╔══════════════════════════════════════════════════════════════╗
+ * ║  OFFLINE-FIRST DESIGN — ZERO FIREBASE DEPENDENCY FOR CHAT   ║
+ * ║                                                              ║
+ * ║  Message delivery is EXCLUSIVELY via:                        ║
+ * ║    1. AsyncStorage  — persistent local storage               ║
+ * ║    2. BLE Mesh (expo-nearby-connections) — P2P relay         ║
+ * ║                                                              ║
+ * ║  Firebase is NOT used for chat. Firebase is only used for:   ║
+ * ║    • SOS emergency alerts (govt dashboard visibility)        ║
+ * ║    • Government rescue team dispatch notifications           ║
+ * ╚══════════════════════════════════════════════════════════════╝
  *
- * Room ID = sorted combo of both userIds so both sides share the same room.
+ * Flow:
+ *   Send  → save to AsyncStorage → broadcast via BLE mesh
+ *   Receive → BLEMeshService._storeLocally() saves to AsyncStorage
+ *           → UI listener / storage poll shows new message
+ *
+ * Room ID = sorted phone numbers so both sides share the same key.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-
-const FIREBASE_URL = 'https://safeconnect-f509c-default-rtdb.asia-southeast1.firebasedatabase.app';
 
 // ─── Types ────────────────────────────────────────────────────────
 export type MessageStatus = 'sending' | 'saved' | 'delivered';
@@ -45,43 +55,40 @@ const messagesKey = (roomId: string) => `chat_messages_${roomId}`;
 
 const genId = () => `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-// ─── Connectivity check ───────────────────────────────────────────
-async function isOnline(): Promise<boolean> {
-    try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 3000);
-        const r = await fetch('https://www.google.com/generate_204', {
-            method: 'HEAD', cache: 'no-cache', signal: controller.signal,
-        });
-        clearTimeout(timer);
-        return r.ok || r.status === 204;
-    } catch { return false; }
-}
-
 // ─── Chat Service ─────────────────────────────────────────────────
 class ChatServiceClass {
 
-    // ── Get or create room ──────────────────────────────────────────
+    // ── Get room ID (shared by both devices via sorted phone numbers) ──
     getRoomId(myId: string, contactId: string): string {
         return roomKey(myId, contactId);
     }
 
-    // ── Load messages for an arbitrary roomId (e.g. mesh_broadcast) ──
+    // ── Load all messages for a room from local storage ─────────────
     async getMessagesByRoomId(roomId: string): Promise<ChatMessage[]> {
         return this._getLocalMessages(roomId);
     }
 
-    // ── Save a message directly to a known roomId ──────────────────
+    // ── Save a message directly to a known roomId ───────────────────
     async saveMessageToRoom(roomId: string, msg: ChatMessage): Promise<void> {
         await this._saveMessageLocally(roomId, msg);
     }
 
-    // ── Send a message ──────────────────────────────────────────────
+    /**
+     * Send a message.
+     *
+     * OFFLINE-FIRST: saves to AsyncStorage immediately.
+     * Status is set to 'saved' (single tick) — it becomes 'delivered'
+     * once the receiving device's BLE listener stores it locally and
+     * the UI poll picks it up. There is NO Firebase involvement.
+     *
+     * The caller (MeshChatScreen) is responsible for broadcasting
+     * the message via bleMeshService.broadcast() after calling this.
+     */
     async sendMessage(
         myId: string,
         myName: string,
         contactId: string,
-        contactName: string,
+        _contactName: string,   // kept for API compat, unused without Firebase
         text: string,
         type: ChatMessage['type'] = 'text',
         metadata?: Record<string, any>
@@ -96,165 +103,116 @@ class ChatServiceClass {
             text,
             type,
             createdAt: Date.now(),
-            status: 'saving' as any,
+            status: 'saved',  // saved locally — mesh delivery marks it 'delivered'
             metadata,
         };
 
-        // 1. Save locally immediately (OFFLINE SAFE)
+        // Save locally immediately (works fully offline)
         await this._saveMessageLocally(roomId, msg);
-        msg.status = 'saved';
-
-        // 2. Try to sync to Firebase
-        const online = await isOnline();
-        if (online) {
-            try {
-                await fetch(
-                    `${FIREBASE_URL}/chats/${roomId}/messages/${msg.id}.json`,
-                    {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(msg),
-                    }
-                );
-                // Also update room metadata
-                await fetch(`${FIREBASE_URL}/chats/${roomId}/meta.json`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        id: roomId,
-                        participantIds: [myId, contactId],
-                        participantNames: [myName, contactName],
-                        lastMessage: text.slice(0, 60),
-                        lastMessageTime: msg.createdAt,
-                        updatedAt: Date.now(),
-                    }),
-                });
-                msg.status = 'delivered';
-                await this._updateMessageStatus(roomId, msg.id, 'delivered');
-                console.log('[Chat] Message delivered to Firebase ✅');
-            } catch (e) {
-                console.log('[Chat] Firebase sync failed, message saved locally');
-            }
-        } else {
-            console.log('[Chat] Offline — message saved locally, will sync when online');
-        }
+        console.log('[Chat] ✅ Message saved locally:', msg.id);
 
         return msg;
     }
 
-    // ── Get messages for a room ─────────────────────────────────────
+    // ── Get messages for a room (local only) ────────────────────────
     async getMessages(
         myId: string,
         contactId: string,
-        onNewMessage?: (msg: ChatMessage) => void
+        _onNewMessage?: (msg: ChatMessage) => void
     ): Promise<ChatMessage[]> {
         const roomId = this.getRoomId(myId, contactId);
-
-        // 1. Load from local AsyncStorage
-        const local = await this._getLocalMessages(roomId);
-
-        // 2. Try to fetch from Firebase (pulls messages from the other person)
-        const online = await isOnline();
-        if (online) {
-            try {
-                const res = await fetch(`${FIREBASE_URL}/chats/${roomId}/messages.json`);
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data) {
-                        const remote: ChatMessage[] = Object.values(data);
-                        // Merge remote into local (add any we don't have)
-                        const localIds = new Set(local.map(m => m.id));
-                        const newRemote = remote.filter(m => !localIds.has(m.id));
-                        if (newRemote.length > 0) {
-                            const merged = [...local, ...newRemote].sort((a, b) => a.createdAt - b.createdAt);
-                            await this._saveAllMessages(roomId, merged);
-                            newRemote.forEach(m => onNewMessage?.(m));
-                            return merged;
-                        }
-                    }
-                }
-            } catch (e) {
-                console.log('[Chat] Could not fetch remote messages');
-            }
-        }
-
-        return local;
+        return this._getLocalMessages(roomId);
     }
 
-    // ── Fetch ALL messages for a room from Firebase (full sync) ────────────
-    async fetchAllFromFirebase(myId: string, contactId: string): Promise<ChatMessage[]> {
-        const roomId = this.getRoomId(myId, contactId);
-        try {
-            const res = await fetch(`${FIREBASE_URL}/chats/${roomId}/messages.json`);
-            if (!res.ok) return [];
-            const data = await res.json();
-            if (!data) return [];
-            return Object.values(data) as ChatMessage[];
-        } catch { return []; }
+    /**
+     * Poll for new messages by roomId.
+     *
+     * OFFLINE-FIRST: reads only from local AsyncStorage.
+     * Returns messages from others that arrived since `since` timestamp.
+     * BLEMeshService._storeLocally() writes incoming BLE packets here.
+     */
+    async pollNewMessagesByRoomId(
+        roomId: string,
+        myId: string,
+        since: number
+    ): Promise<ChatMessage[]> {
+        const all = await this._getLocalMessages(roomId);
+        // Return messages from other senders that arrived after `since`
+        return all.filter(m => m.senderId !== myId && m.createdAt > since);
     }
 
-    // ── Poll for new messages from Firebase ─────────────────────────
+    // ── Poll for new messages (legacy API compat) ───────────────────
     async pollNewMessages(
         myId: string,
         contactId: string,
         since: number
     ): Promise<ChatMessage[]> {
         const roomId = this.getRoomId(myId, contactId);
-        const online = await isOnline();
-        if (!online) return [];
-
-        try {
-            // Fetch ALL messages from Firebase (avoid broken orderBy query with index issues)
-            const res = await fetch(`${FIREBASE_URL}/chats/${roomId}/messages.json`);
-            if (!res.ok) return [];
-            const data = await res.json();
-            if (!data) return [];
-            const msgs: ChatMessage[] = Object.values(data);
-            // Filter: newer than since AND not sent by me
-            const fresh = msgs.filter(m => m.senderId !== myId && m.createdAt > since);
-            // Save any new ones locally
-            for (const m of fresh) {
-                await this._saveMessageLocally(roomId, m);
-            }
-            return fresh;
-        } catch { return []; }
+        return this.pollNewMessagesByRoomId(roomId, myId, since);
     }
 
-    // ── Sync pending offline messages ───────────────────────────────
-    async syncPendingMessages(): Promise<number> {
-        const online = await isOnline();
-        if (!online) return 0;
+    /**
+     * Mark a message as delivered (called after BLE broadcast confirms receipt).
+     * This was previously done by Firebase — now done locally.
+     */
+    async markAsDelivered(roomId: string, msgId: string): Promise<void> {
+        await this._updateMessageStatus(roomId, msgId, 'delivered');
+    }
 
+    /**
+     * syncMessageToFirebase — REMOVED (no Firebase for chat).
+     * Kept as a no-op for API compatibility so no callers break.
+     * @deprecated Use BLE mesh broadcast instead.
+     */
+    async syncMessageToFirebase(_roomId: string, _msg: ChatMessage): Promise<boolean> {
+        console.log('[Chat] syncMessageToFirebase() called but Firebase chat is disabled. Use BLE mesh.');
+        return false;
+    }
+
+    /**
+     * syncPendingMessages — REMOVED (no Firebase for chat).
+     * BLEMeshService._gatewaySync calls this — returning 0 is safe.
+     * @deprecated Messages are delivered via BLE, not Firebase.
+     */
+    async syncPendingMessages(): Promise<number> {
+        // No-op: chat sync to Firebase is disabled.
+        // BLE mesh is the delivery mechanism.
+        return 0;
+    }
+
+    /**
+     * fetchAllFromFirebase — REMOVED (no Firebase for chat).
+     * @deprecated Returns local messages instead.
+     */
+    async fetchAllFromFirebase(myId: string, contactId: string): Promise<ChatMessage[]> {
+        console.log('[Chat] fetchAllFromFirebase() is disabled. Returning local messages.');
+        return this.getMessages(myId, contactId);
+    }
+
+    // ── Clear all messages for a room (e.g. on logout) ─────────────
+    async clearRoom(roomId: string): Promise<void> {
+        await AsyncStorage.removeItem(messagesKey(roomId));
+    }
+
+    // ── Clear ALL chat data (logout / reset) ────────────────────────
+    async clearAllChats(): Promise<void> {
         const keys = await AsyncStorage.getAllKeys();
         const chatKeys = keys.filter(k => k.startsWith('chat_messages_'));
-        let synced = 0;
-
-        for (const key of chatKeys) {
-            const raw = await AsyncStorage.getItem(key);
-            if (!raw) continue;
-            const msgs: ChatMessage[] = JSON.parse(raw);
-            const pending = msgs.filter(m => m.status === 'saved');
-            for (const msg of pending) {
-                try {
-                    await fetch(`${FIREBASE_URL}/chats/${msg.roomId}/messages/${msg.id}.json`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ ...msg, status: 'delivered' }),
-                    });
-                    msg.status = 'delivered';
-                    synced++;
-                } catch { /* skip */ }
-            }
-            await AsyncStorage.setItem(key, JSON.stringify(msgs));
+        if (chatKeys.length > 0) {
+            await AsyncStorage.multiRemove(chatKeys);
         }
-        return synced;
+        console.log('[Chat] All local chat data cleared.');
     }
 
     // ── Private helpers ────────────────────────────────────────────
     private async _getLocalMessages(roomId: string): Promise<ChatMessage[]> {
-        const raw = await AsyncStorage.getItem(messagesKey(roomId));
-        if (!raw) return [];
-        return JSON.parse(raw);
+        try {
+            const raw = await AsyncStorage.getItem(messagesKey(roomId));
+            if (!raw) return [];
+            return JSON.parse(raw) as ChatMessage[];
+        } catch {
+            return [];
+        }
     }
 
     private async _saveMessageLocally(roomId: string, msg: ChatMessage): Promise<void> {
