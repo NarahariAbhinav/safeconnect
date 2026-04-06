@@ -445,7 +445,9 @@ All required permissions are declared in `app.json`:
 
 | Name | Role |
 |------|------|
-| **Abhinav Narahari** | Developer & Project Lead |
+| **Abhinav Narahari** |
+| **Sainath Goud** |
+| **Chetan Goud** |
 
 **NMIMS University — Semester 8 Project**
 
