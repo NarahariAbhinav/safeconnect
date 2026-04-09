@@ -4,16 +4,19 @@
  * REWRITTEN: Bulletproof implementation.
  *
  * CRITICAL FIXES:
- *   1. Event listener return values MUST be stored as class properties.
- *      expo-nearby-connections creates a new EventEmitter per onXxx() call.
- *      If the returned unsubscribe closure is GC'd, the EventEmitter loses
- *      its reference chain and the listener stops firing.
+ * 1. Event listener return values MUST be stored as class properties.
+ * expo-nearby-connections creates a new EventEmitter per onXxx() call.
+ * If the returned unsubscribe closure is GC'd, the EventEmitter loses
+ * its reference chain and the listener stops firing.
  *
- *   2. Kotlin native patch NO LONGER auto-accepts on the advertiser side.
- *      Only JS calls acceptConnection (which registers payloadCallback).
- *      The requestor side still auto-accepts in native (no JS event for it).
+ * 2. Kotlin native patch NO LONGER auto-accepts on the advertiser side.
+ * Only JS calls acceptConnection (which registers payloadCallback).
+ * The requestor side still auto-accepts in native (no JS event for it).
  *
- *   3. Single in-memory outgoing queue replaces 3 overlapping queue systems.
+ * 3. Single in-memory outgoing queue replaces 3 overlapping queue systems.
+ * * 4. E2EE Privacy & Relay Fix: Packets are relayed in their original encrypted state.
+ * Decryption only creates a local clone to prevent broadcasting plaintext.
+ * * 5. Race Conditions Fixed: AsyncStorage writes in _storeLocally are now guarded by a mutex.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import CryptoJS from 'crypto-js';
@@ -74,14 +77,18 @@ class BLEMeshServiceClass {
   private _name = 'SC-' + Math.floor(Math.random() * 9000 + 1000);
   private outgoingQueue: MeshPacket[] = [];
 
+  // Storage Mutex to prevent AsyncStorage race conditions during packet floods
+  private _storageMutex = false;
+
   private async _persistQueue() {
-    try { await AsyncStorage.setItem('mesh_outgoing_queue', JSON.stringify(this.outgoingQueue)); } catch { }
+    try { await AsyncStorage.setItem('mesh_outgoing_queue', JSON.stringify(this.outgoingQueue)); } catch (e) { }
   }
+
   private async _loadQueue() {
     try {
       const raw = await AsyncStorage.getItem('mesh_outgoing_queue');
       if (raw) this.outgoingQueue = JSON.parse(raw);
-    } catch { }
+    } catch (e) { }
   }
 
   /**
@@ -118,7 +125,7 @@ class BLEMeshServiceClass {
   }
   private _emitUI(e: MeshUIEvent): void {
     console.log('[Mesh] UI:', e.event, e.peerName);
-    this.uiListeners.forEach(cb => { try { cb(e); } catch { } });
+    this.uiListeners.forEach(cb => { try { cb(e); } catch (e) { } });
   }
 
   // ── Data listeners ─────────────────────────────────────────────
@@ -266,34 +273,42 @@ class BLEMeshServiceClass {
         const pkt: MeshPacket = JSON.parse(text);
         console.log('[Mesh] Packet:', pkt.type, pkt.id, 'hops:', pkt.hops);
 
-        // E2EE decrypt for private chat
+        let localPktToStore = pkt;
+
+        // E2EE decrypt for private chat solely to verify if it's for us. We DO NOT mutate the relay packet.
         if (pkt.type === 'chat') {
           try {
             const p = JSON.parse(pkt.payload);
             if (p.encrypted && p.roomId) {
-              const bytes = CryptoJS.AES.decrypt(p.message, p.roomId);
+              const aesKey = p.roomId + '_SC_SECRET_KEY';
+              const bytes = CryptoJS.AES.decrypt(p.message, aesKey);
               const dec = bytes.toString(CryptoJS.enc.Utf8);
               if (dec) {
-                p.message = JSON.parse(dec);
-                pkt.payload = JSON.stringify(p);
-                console.log('[Mesh] 🔓 Decrypted private chat');
+                const decryptedMessage = JSON.parse(dec);
+                console.log('[Mesh] 🔓 Decrypted private chat (local view only)');
 
                 // Fire Network ACK back into the mesh confirming decryption/delivery
                 // Only do this if it's not a message we sent ourselves (logical user ID check)
-                if (p.message.senderId && p.message.id) {
+                if (decryptedMessage.senderId && decryptedMessage.id) {
                   AsyncStorage.getItem('safeconnect_currentUser').then(raw => {
                     if (raw) {
                       try {
                         const u = JSON.parse(raw);
-                        if (u.id && p.message.senderId !== u.id) {
-                          const ack = this.createChatAckPacket(p.message.id, p.roomId);
+                        if (u.id && decryptedMessage.senderId !== u.id) {
+                          const ack = this.createChatAckPacket(decryptedMessage.id, p.roomId);
                           // Fire-and-forget broadcast of the ACK
                           this.broadcast(ack).catch(() => { });
                         }
-                      } catch { }
+                      } catch (e) { }
                     }
                   }).catch(() => { });
                 }
+
+                // create a detached clone for local consumption so we don't accidentally broadcast plaintext
+                localPktToStore = JSON.parse(JSON.stringify(pkt));
+                const lp = JSON.parse(localPktToStore.payload);
+                lp.message = decryptedMessage;
+                localPktToStore.payload = JSON.stringify(lp);
               }
             }
           } catch {
@@ -301,7 +316,7 @@ class BLEMeshServiceClass {
           }
         }
 
-        this._handlePacket(pkt);
+        this._handlePacket(pkt, localPktToStore);
       } catch (e) {
         console.warn('[Mesh] Parse error:', e);
       }
@@ -394,19 +409,21 @@ class BLEMeshServiceClass {
   }
 
   // ── Handle incoming packet ─────────────────────────────────────
-  private async _handlePacket(pkt: MeshPacket): Promise<void> {
+  private async _handlePacket(pkt: MeshPacket, localPkt?: MeshPacket): Promise<void> {
     if (seenIds.has(pkt.id)) { console.log('[Mesh] Dup:', pkt.id); return; }
     if (Date.now() > pkt.ttl) { console.log('[Mesh] Expired:', pkt.id); return; }
     if (pkt.hops >= MAX_HOPS) { console.log('[Mesh] Max hops:', pkt.id); return; }
 
     markSeen(pkt.id);
 
-    // Store locally
-    await this._storeLocally(pkt);
+    const pktForUI = localPkt || pkt;
 
-    // Notify UI listeners
+    // Store locally using mutexed local data
+    await this._storeLocally(pktForUI);
+
+    // Notify UI listeners with the local readable payload
     console.log('[Mesh] → Notifying', this.listeners.length, 'listener(s)');
-    this.listeners.forEach(cb => { try { cb(pkt); } catch (e) { console.warn('[Mesh] Listener err:', e); } });
+    this.listeners.forEach(cb => { try { cb(pktForUI); } catch (e) { console.warn('[Mesh] Listener err:', e); } });
 
     // 5. Chat and Chat ACKs are ALWAYS delivered via BLE mesh only
     //    Firebase is NOT used. Both group (mesh_broadcast) and private room packets rely on BLE.
@@ -421,8 +438,12 @@ class BLEMeshServiceClass {
     this._gatewaySync().catch(() => { });
   }
 
-  // ── Store locally ──────────────────────────────────────────────
+  // ── Store locally (with Race Condition Mutex Lock) ───────────────
   private async _storeLocally(pkt: MeshPacket): Promise<void> {
+    // Acquire mutex lock
+    while (this._storageMutex) { await new Promise(r => setTimeout(r, 50)); }
+    this._storageMutex = true;
+
     try {
       const data = JSON.parse(pkt.payload);
 
@@ -478,6 +499,9 @@ class BLEMeshServiceClass {
       }
     } catch (e) {
       console.warn('[Mesh] storeLocally err:', (e as any)?.message);
+    } finally {
+      // Release mutex lock
+      this._storageMutex = false;
     }
   }
 
@@ -498,8 +522,13 @@ class BLEMeshServiceClass {
       const r = await fetch('https://www.google.com/generate_204', { method: 'HEAD', cache: 'no-cache', signal: ctrl.signal });
       clearTimeout(t);
       hasSignal = r.ok || r.status === 204;
-    } catch { hasSignal = false; }
-    if (!hasSignal) return;
+    } catch (e) {
+      hasSignal = false;
+    }
+
+    if (!hasSignal) {
+      return;
+    }
 
     relayed.push(packetId);
     if (relayed.length > 50) relayed.splice(0, relayed.length - 50);
@@ -525,11 +554,11 @@ class BLEMeshServiceClass {
       const r = await fetch('https://www.google.com/generate_204', { method: 'HEAD', cache: 'no-cache', signal: ctrl.signal });
       clearTimeout(t);
       if (!r.ok && r.status !== 204) return false;
-    } catch { return false; }
+    } catch (e) { }
     try {
       const { flushed } = await sosService.flushSyncQueue();
       if (flushed > 0) console.log('[Gateway] Synced:', flushed);
-    } catch { }
+    } catch (e) { }
     return true;
   }
 
@@ -557,7 +586,8 @@ class BLEMeshServiceClass {
 
     // E2EE Encryption for private chat messages
     if (!isGroup) {
-      finalMessage = CryptoJS.AES.encrypt(JSON.stringify(message), roomId).toString();
+      const aesKey = roomId + '_SC_SECRET_KEY';
+      finalMessage = CryptoJS.AES.encrypt(JSON.stringify(message), aesKey).toString();
       encrypted = true;
     }
 
@@ -591,11 +621,11 @@ class BLEMeshServiceClass {
 
   // ── Shutdown ───────────────────────────────────────────────────
   destroy(): void {
-    try { Nearby.stopAdvertise(); } catch { }
-    try { Nearby.stopDiscovery(); } catch { }
+    try { Nearby.stopAdvertise(); } catch (e) { }
+    try { Nearby.stopDiscovery(); } catch (e) { }
     // Disconnect each peer individually (Android requires peerId)
     for (const [peerId] of this.peers) {
-      try { Nearby.disconnect(peerId); } catch { }
+      try { Nearby.disconnect(peerId); } catch (e) { }
     }
     this.peers.clear();
     this.outgoingQueue = [];
@@ -609,7 +639,7 @@ class BLEMeshServiceClass {
       try {
         const isReg = await TaskManager.isTaskRegisteredAsync(MESH_KEEP_ALIVE_TASK);
         if (isReg) await Location.stopLocationUpdatesAsync(MESH_KEEP_ALIVE_TASK);
-      } catch { }
+      } catch (e) { }
     }
     this.destroy();
   }

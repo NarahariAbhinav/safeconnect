@@ -75,10 +75,10 @@ function normalizePhone10(phone: string): string {
     return digits.length >= 10 ? digits.slice(-10) : '';
 }
 
-function privateRoomId(myPhone: string, contactPhone: string): string {
-    const a = normalizePhone10(myPhone);
-    const b = normalizePhone10(contactPhone);
-    if (!a || !b) return '';
+function privateRoomId(myIdentifier: string, contactIdentifier: string): string {
+    const a = normalizePhone10(myIdentifier) || myIdentifier;
+    const b = normalizePhone10(contactIdentifier) || contactIdentifier;
+    if (!a || !b) return 'room_unknown';
     return `room_${[a, b].sort().join('_')}`;
 }
 
@@ -266,17 +266,11 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
     // ── Open chat ────────────────────────────────────────────────
     const openChat = useCallback(async (contact: TrustedContact) => {
         const isGroup = contact.id === MESH_GROUP_ID;
+        const fallbackMyId = userPhone || userId;
+        const fallbackTheirId = contact.phone || contact.id;
         const roomId = isGroup
             ? MESH_GROUP_ROOM
-            : privateRoomId(userPhone, contact.phone);
-
-        if (!isGroup && !roomId) {
-            Alert.alert(
-                'Phone Number Required',
-                'Private offline chat needs valid phone numbers on both devices.'
-            );
-            return;
-        }
+            : privateRoomId(fallbackMyId, fallbackTheirId);
 
         setContact(contact);
         setMessages([]);
@@ -300,15 +294,12 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
         setSending(true);
 
         const isGroup = activeContact.id === MESH_GROUP_ID;
+        const fallbackMyId = userPhone || userId;
+        const fallbackTheirId = activeContact.phone || activeContact.id;
+
         const roomId = isGroup
             ? MESH_GROUP_ROOM
-            : privateRoomId(userPhone, activeContact.phone);
-
-        if (!isGroup && !roomId) {
-            Alert.alert('Cannot Send', 'Missing phone numbers for private chat.');
-            setSending(false);
-            return;
-        }
+            : privateRoomId(fallbackMyId, fallbackTheirId);
 
         try {
             const msg: ChatMessage = {
@@ -338,13 +329,7 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
                 console.warn('[MeshChat] Broadcast error:', e?.message);
             }
 
-            // Upgrade to ✓✓ if peers are connected
-            if (bleMeshService.ready && bleMeshService.getPeerCount() > 0) {
-                const delivered: ChatMessage = { ...msg, status: 'delivered' };
-                await chatService.saveMessageToRoom(roomId, delivered);
-                setMessages(prev => prev.map(m => m.id === msg.id ? delivered : m));
-                messagesRef.current = messagesRef.current.map(m => m.id === msg.id ? delivered : m);
-            }
+            // Rely entirely on incoming chat_ack packets via BLEMeshService to upgrade status
         } catch (e) {
             console.error('[MeshChat] Send failed:', e);
         } finally {
