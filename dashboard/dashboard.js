@@ -192,7 +192,7 @@ function pSOS(list) {
     var p = $('p-sos');
     if (!list.length) { p.innerHTML = '<div class="emp"><div class="emp-i">&#10004;</div><div class="emp-t">No Active SOS</div><div class="emp-b">All clear in selected area.</div></div>'; return; }
     list.sort(function (a, b) { return b.activatedAt - a.activatedAt; });
-    p.innerHTML = '<div class="ph">Active SOS &#8212; ' + list.length + '</div>' + list.map(function (s) {
+    p.innerHTML = '<div class="ph">Active SOS &#8212; ' + list.length + '</div><div class="grid-wrap">' + list.map(function (s) {
         var w = Date.now() - s.activatedAt > WM;
         var dispatched = s.govtAction && s.govtAction.status;
         var dispBadge = dispatched ? '<span class="p pg">&#10004; ' + (s.govtAction.status || 'Dispatched').replace(/_/g, ' ') + '</span>' : '';
@@ -200,8 +200,8 @@ function pSOS(list) {
         var btnLabel = dispatched ? '&#128221; Update' : '&#128658; Dispatch';
         var btnBg = dispatched ? 'var(--blue)' : 'var(--green)';
         var idx = sid(s);
-        return '<div class="cd" onclick="showSOS(' + idx + ')"><div class="cs" style="background:' + (dispatched ? '#2A7A5A' : '#C62828') + '"></div><div class="cr"><div class="ca" style="background:var(--red-lt);color:var(--red)">' + ini(s.userName) + '</div><div><div class="cn">' + (s.userName || 'Unknown') + '</div><div class="csub">' + (s.gps && s.gps.address ? s.gps.address : 'GPS captured') + '</div></div></div><div class="cf">' + (w ? '<span class="p pw">&#9888; ' + Math.floor((Date.now() - s.activatedAt) / 60000) + 'm</span>' : '') + '<span class="p pr">&#128308; ACTIVE</span>' + dispBadge + batBadge + (s.viaBleMesh ? '<span class="p py">BLE Mesh</span>' : '') + (s.contactsNotified && s.contactsNotified.length ? '<span class="p pg">SMS</span>' : '') + '<span class="ts">' + ago(s.activatedAt) + '</span><button class="dbtn" style="background:' + btnBg + '" onclick="event.stopPropagation();dispatch(' + idx + ')">' + btnLabel + '</button><button class="dbtn" style="background:#7B1FA2" onclick="event.stopPropagation();resolveSOS(' + idx + ')">&#10003; Resolve</button></div></div>';
-    }).join('');
+        return '<div class="cd" onclick="showSOS(' + idx + ')"><div class="cs" style="background:' + (dispatched ? '#2A7A5A' : '#C62828') + '"></div><div class="cr"><div class="ca" style="background:var(--red-lt);color:var(--red)">' + ini(s.userName) + '</div><div style="overflow:hidden"><div class="cn">' + (s.userName || 'Unknown') + '</div><div class="csub">' + (s.gps && s.gps.address ? s.gps.address : 'GPS captured') + '</div></div></div><div class="cf">' + (w ? '<span class="p pw">&#9888; ' + Math.floor((Date.now() - s.activatedAt) / 60000) + 'm</span>' : '') + '<span class="p pr">&#128308; ACTIVE</span>' + dispBadge + batBadge + (s.viaBleMesh ? '<span class="p py">BLE Mesh</span>' : '') + '<span class="ts">' + ago(s.activatedAt) + '</span></div><div class="cf" style="margin-top:4px"><button class="dbtn" style="background:' + btnBg + '" onclick="event.stopPropagation();dispatch(' + idx + ')">' + btnLabel + '</button><button class="dbtn" style="background:#7B1FA2" onclick="event.stopPropagation();resolveSOS(' + idx + ')">&#10003; Resolve</button></div></div>';
+    }).join('') + '</div>';
 }
 
 // === SOS Modal ===
@@ -271,10 +271,10 @@ function pNeeds(list) {
     var p = $('p-needs');
     if (!list.length) { p.innerHTML = '<div class="emp"><div class="emp-i">&#128203;</div><div class="emp-t">No Needs</div><div class="emp-b">When someone taps "I Need Help" in the app, requests appear here.</div></div>'; return; }
     list.sort(function (a, b) { return (b.reportedAt || 0) - (a.reportedAt || 0); });
-    p.innerHTML = '<div class="ph">"I Need Help" &#8212; ' + list.length + '</div>' + list.map(function (n) {
+    p.innerHTML = '<div class="ph">"I Need Help" &#8212; ' + list.length + '</div><div class="grid-wrap">' + list.map(function (n) {
         var icons = (n.needs || []).map(function (k) { return NE[k] || '?'; }).join(' ');
-        return '<div class="cd" onclick="fly(' + (n.gps && n.gps.latitude || 0) + ',' + (n.gps && n.gps.longitude || 0) + ')"><div class="cs" style="background:#D84315"></div><div class="cr"><div class="ca" style="background:var(--amber-lt);color:var(--amber)">' + icons + '</div><div><div class="cn">' + (n.userName || 'Unknown') + '</div><div class="csub">' + (n.gps && n.gps.address ? n.gps.address : 'GPS') + '</div></div></div><div class="cb">Needs: <b>' + ((n.needs || []).join(', ') || '\u2014') + '</b>' + (n.notes ? '<br>' + n.notes : '') + '</div><div class="cf"><span class="p pa">NEEDS HELP</span><span class="p py">' + (n.peopleCount || 1) + ' person' + ((n.peopleCount || 1) > 1 ? 's' : '') + '</span><span class="ts">' + ago(n.reportedAt) + '</span></div></div>';
-    }).join('');
+        return '<div class="cd" onclick="fly(' + (n.gps && n.gps.latitude || 0) + ',' + (n.gps && n.gps.longitude || 0) + ')"><div class="cs" style="background:#D84315"></div><div class="cr"><div class="ca" style="background:var(--amber-lt);color:var(--amber)">' + icons + '</div><div style="overflow:hidden"><div class="cn">' + (n.userName || 'Unknown') + '</div><div class="csub">' + (n.gps && n.gps.address ? n.gps.address : 'GPS') + '</div></div></div><div class="cb">Needs: <b>' + ((n.needs || []).join(', ') || '\u2014') + '</b></div><div class="cf"><span class="p pa">NEEDS HELP</span><span class="p py">' + (n.peopleCount || 1) + ' ppl</span><span class="ts">' + ago(n.reportedAt) + '</span></div></div>';
+    }).join('') + '</div>';
 }
 
 // === Help Panel ===
@@ -283,10 +283,10 @@ function pHelp(list) {
     var p = $('p-help');
     if (!list.length) { p.innerHTML = '<div class="emp"><div class="emp-i">&#129309;</div><div class="emp-t">No Help Offers</div><div class="emp-b">When someone taps "I Can Help", offers appear here.</div></div>'; return; }
     list.sort(function (a, b) { return (b.offeredAt || 0) - (a.offeredAt || 0); });
-    p.innerHTML = '<div class="ph">Volunteers — ' + list.length + '</div>' + list.map(function (r) {
+    p.innerHTML = '<div class="ph">Volunteers — ' + list.length + '</div><div class="grid-wrap">' + list.map(function (r) {
         var icons = (r.resources || []).map(function (k) { return RE[k] || '?'; }).join(' ');
-        return '<div class="cd" onclick="fly(' + (r.gps && r.gps.latitude || 0) + ',' + (r.gps && r.gps.longitude || 0) + ')"><div class="cs" style="background:#2A7A5A"></div><div class="cr"><div class="ca" style="background:var(--green-lt);color:var(--green)">' + icons + '</div><div><div class="cn">' + (r.userName || 'Volunteer') + '</div><div class="csub">' + (r.gps && r.gps.address ? r.gps.address : 'GPS') + '</div></div></div><div class="cb">Offering: <b>' + ((r.resources || []).join(', ') || '\u2014') + '</b>' + (r.capacity ? '<br>Can help ' + r.capacity + ' people' : '') + (r.notes ? '<br>' + r.notes : '') + '</div><div class="cf"><span class="p pg">CAN HELP</span><span class="ts">' + ago(r.offeredAt) + '</span></div></div>';
-    }).join('');
+        return '<div class="cd" onclick="fly(' + (r.gps && r.gps.latitude || 0) + ',' + (r.gps && r.gps.longitude || 0) + ')"><div class="cs" style="background:#2A7A5A"></div><div class="cr"><div class="ca" style="background:var(--green-lt);color:var(--green)">' + icons + '</div><div style="overflow:hidden"><div class="cn">' + (r.userName || 'Volunteer') + '</div><div class="csub">' + (r.gps && r.gps.address ? r.gps.address : 'GPS') + '</div></div></div><div class="cb">Offering: <b>' + ((r.resources || []).join(', ') || '\u2014') + '</b></div><div class="cf"><span class="p pg">CAN HELP</span><span class="ts">' + ago(r.offeredAt) + '</span></div></div>';
+    }).join('') + '</div>';
 }
 
 // === Camps Panel ===
@@ -294,24 +294,24 @@ function pCamps(list) {
     var p = $('p-camps');
     if (!list.length) { p.innerHTML = '<div class="emp"><div class="emp-i">&#9978;</div><div class="emp-t">No Camps</div><div class="emp-b">No relief camps for this area.</div></div>'; return; }
     list.sort(function (a, b) { return (a.name || '').localeCompare(b.name || ''); });
-    p.innerHTML = '<div class="ph">Relief Camps &#8212; ' + list.length + '</div>' + list.map(function (c) {
+    p.innerHTML = '<div class="ph">Relief Camps &#8212; ' + list.length + '</div><div class="grid-wrap">' + list.map(function (c) {
         var clat = (c.gps && c.gps.latitude) || c.latitude || 0;
         var clng = (c.gps && c.gps.longitude) || c.longitude || 0;
         var pct = Math.round((c.currentOccupancy / c.capacity) * 100) || 0;
         var bc = pct > 90 ? '#C62828' : pct > 70 ? '#D84315' : '#2A7A5A';
         var pc = pct > 90 ? 'pr' : pct > 70 ? 'pa' : 'pg';
         var lb = pct > 90 ? 'Near Full' : pct > 70 ? 'Filling' : 'Available';
-        return '<div class="cd" onclick="fly(' + clat + ',' + clng + ')"><div class="cs" style="background:#1565C0"></div><div class="cr"><div class="ca" style="background:var(--blue-lt);color:var(--blue)">&#9978;</div><div><div class="cn" style="font-size:11px">' + c.name + '</div><div class="csub">' + c.district + ' &#183; ' + (c.contactNumber || '—') + '</div></div></div><div class="cpw"><div class="cpb" style="width:' + pct + '%;background:' + bc + '"></div></div><div class="cpl">' + c.currentOccupancy + '/' + c.capacity + ' (' + pct + '%)</div><div class="rcs">' + (c.resources || []).map(function (r) { return '<span class="rc">' + r + '</span>'; }).join('') + '</div><div class="cf" style="margin-top:5px"><span class="p ' + pc + '">' + lb + '</span>' + (c.isGovtRegistered ? '<span class="p po">Govt</span>' : '') + '</div></div>';
-    }).join('');
+        return '<div class="cd" onclick="fly(' + clat + ',' + clng + ')"><div class="cs" style="background:#1565C0"></div><div class="cr"><div class="ca" style="background:var(--blue-lt);color:var(--blue)">&#9978;</div><div style="overflow:hidden"><div class="cn">' + c.name + '</div><div class="csub">' + c.district + '</div></div></div><div class="cpw"><div class="cpb" style="width:' + pct + '%;background:' + bc + '"></div></div><div class="cpl">' + c.currentOccupancy + '/' + c.capacity + ' (' + pct + '%)</div><div class="rcs">' + (c.resources || []).map(function (r) { return '<span class="rc">' + r + '</span>'; }).join('') + '</div><div class="cf" style="margin-top:4px"><span class="p ' + pc + '">' + lb + '</span>' + (c.isGovtRegistered ? '<span class="p po">Govt</span>' : '') + '</div></div>';
+    }).join('') + '</div>';
 }
 
 // === Teams Panel ===
 function pTeams(list) {
     var p = $('p-teams');
     if (!list.length) { p.innerHTML = '<div class="emp"><div class="emp-i">&#128658;</div><div class="emp-t">Loading...</div></div>'; return; }
-    p.innerHTML = '<div class="ph">Rescue Teams &#8212; ' + list.length + '</div>' + list.map(function (t) {
-        return '<div class="cd" onclick="fly(' + (t.lat || 0) + ',' + (t.lng || 0) + ')"><div class="cs" style="background:#2A7A5A"></div><div class="cr"><div class="ca" style="background:var(--green-lt);color:var(--green)">&#128658;</div><div><div class="cn">' + t.name + '</div><div class="csub">' + t.contact + ' &#183; ' + t.totalTeams + ' teams</div></div></div><div class="cb">' + t.headquarters + '</div><div class="rcs" style="margin-top:5px">' + (t.capabilities || []).map(function (c) { return '<span class="rc">' + c + '</span>'; }).join('') + '</div><div class="cf" style="margin-top:5px"><span class="p py">' + t.type + '</span>' + (t.website ? '<a href="' + t.website + '" target="_blank" style="font-size:10px;color:var(--blue);font-weight:600;text-decoration:none">Website &#8594;</a>' : '') + '</div></div>';
-    }).join('');
+    p.innerHTML = '<div class="ph">Rescue Teams &#8212; ' + list.length + '</div><div class="grid-wrap">' + list.map(function (t) {
+        return '<div class="cd" onclick="fly(' + (t.lat || 0) + ',' + (t.lng || 0) + ')"><div class="cs" style="background:#2A7A5A"></div><div class="cr"><div class="ca" style="background:var(--green-lt);color:var(--green)">&#128658;</div><div style="overflow:hidden"><div class="cn">' + t.name + '</div><div class="csub">' + t.totalTeams + ' teams</div></div></div><div class="cb">' + t.headquarters + '</div><div class="rcs" style="margin-top:4px">' + (t.capabilities || []).map(function (c) { return '<span class="rc">' + c + '</span>'; }).join('') + '</div><div class="cf" style="margin-top:4px"><span class="p py">' + t.type + '</span></div></div>';
+    }).join('') + '</div>';
 }
 
 // === Districts Panel ===
@@ -323,9 +323,9 @@ function pDists(list) {
     var h = '<div class="ph">33 Districts &#8212; Click to filter</div>';
     zones.forEach(function (z) {
         var zd = list.filter(function (d) { return d.zone === z; });
-        h += '<div style="margin-bottom:10px"><div style="font-size:9px;font-weight:800;color:var(--orange);text-transform:uppercase;letter-spacing:.7px;margin-bottom:4px;padding:3px 7px;background:var(--orange-lt);border-radius:5px">' + z + ' (' + zd.length + ')</div>' + zd.map(function (d) {
-            return '<div class="cd" onclick="sd(\'' + d.name + '\')" style="padding:8px 10px 8px 13px;margin-bottom:3px"><div class="cs" style="background:var(--orange)"></div><div style="display:flex;align-items:center;gap:7px;padding-left:4px"><div style="flex:1"><div class="cn" style="font-size:11px">' + d.name + '</div><div class="csub">ECR: ' + d.ecr + '</div></div><span class="p po" style="font-size:8px">' + d.districtCode + '</span></div></div>';
-        }).join('') + '</div>';
+        h += '<div style="margin-bottom:10px"><div style="font-size:9px;font-weight:800;color:var(--orange);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;padding:4px 8px;background:var(--orange-lt);border-radius:6px">' + z + ' (' + zd.length + ')</div><div class="grid-wrap">' + zd.map(function (d) {
+            return '<div class="cd" onclick="sd(\'' + d.name + '\')" style="padding:10px"><div class="cs" style="background:var(--orange)"></div><div style="padding-left:6px"><div class="cn">' + d.name + '</div><div class="csub">ECR: ' + d.ecr + '</div><span class="p po" style="font-size:7px;margin-top:4px">' + d.districtCode + '</span></div></div>';
+        }).join('') + '</div></div>';
     });
     p.innerHTML = h;
 }

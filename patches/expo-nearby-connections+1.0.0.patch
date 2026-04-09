@@ -1,5 +1,5 @@
 diff --git a/node_modules/expo-nearby-connections/android/src/main/java/expo/modules/nearbyconnections/NearbyConnectionsModule.kt b/node_modules/expo-nearby-connections/android/src/main/java/expo/modules/nearbyconnections/NearbyConnectionsModule.kt
-index 3aa04ca..c2f7480 100644
+index 3aa04ca..d1a3b5e 100644
 --- a/node_modules/expo-nearby-connections/android/src/main/java/expo/modules/nearbyconnections/NearbyConnectionsModule.kt
 +++ b/node_modules/expo-nearby-connections/android/src/main/java/expo/modules/nearbyconnections/NearbyConnectionsModule.kt
 @@ -127,13 +127,7 @@ class NearbyConnectionsModule(
@@ -17,15 +17,16 @@ index 3aa04ca..c2f7480 100644
  
                  callbacks.onConnected(peerId, targetPeerName)
              }
-@@ -145,6 +139,7 @@ class NearbyConnectionsModule(
+@@ -145,6 +139,8 @@ class NearbyConnectionsModule(
              override fun onConnectionInitiated(peerId: String, connectionInfo: ConnectionInfo) {
                  val peerName = connectionInfo.endpointName
                  initiatedPeers[peerId] = peerName
-+                acceptConnection(peerId)
++                // DO NOT call acceptConnection here — JS will call it from onInvitationReceived.
++                // Calling it twice corrupts Google Nearby's payloadCallback registration.
                  callbacks.onInvitationReceived(peerId, peerName)
              }
          }
-@@ -158,13 +153,7 @@ class NearbyConnectionsModule(
+@@ -158,13 +154,7 @@ class NearbyConnectionsModule(
                      return
                  }
  

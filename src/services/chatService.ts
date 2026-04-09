@@ -24,7 +24,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ─── Types ────────────────────────────────────────────────────────
-export type MessageStatus = 'sending' | 'saved' | 'delivered';
+export type MessageStatus = 'sending' | 'saved' | 'delivered' | 'ack';
 
 export interface ChatMessage {
     id: string;

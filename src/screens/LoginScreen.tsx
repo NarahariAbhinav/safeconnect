@@ -113,9 +113,19 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
 
   const handleQuickStart = async () => {
     if (!quickName.trim()) {
-      Alert.alert('Enter your name', 'Please enter at least your name to continue.');
+      Alert.alert('Enter your name', 'Please enter your full name to continue.');
       return;
     }
+
+    const parsedPhone = quickPhone.trim().replace(/\D/g, '');
+    if (parsedPhone.length < 10) {
+      Alert.alert(
+        'Phone Number Required',
+        'Please enter a valid phone number (at least 10 digits). This is strictly required to enable Offline Private Mesh Chat with your contacts.'
+      );
+      return;
+    }
+
     setQuickLoading(true);
     try {
       const guestUser = {
@@ -123,8 +133,7 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
         firstName: quickName.trim().split(' ')[0],
         lastName: quickName.trim().split(' ').slice(1).join(' ') || '',
         // Store only digits so normalizePhone10() works for private mesh chat.
-        // Empty string is handled gracefully; 'Not provided' was breaking it.
-        phone: quickPhone.trim().replace(/\D/g, '') || '',
+        phone: parsedPhone,
         email: '',
         isGuest: true,
         createdAt: new Date().toISOString(),
@@ -376,7 +385,7 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
             />
 
             {/* Phone input */}
-            <Text style={styles.modalLabel}>PHONE NUMBER (for Private Mesh Chat)</Text>
+            <Text style={styles.modalLabel}>PHONE NUMBER * (Required for Private Chat)</Text>
             <TextInput
               style={styles.modalInput}
               placeholder="e.g. 9876543210 — enables private chat"

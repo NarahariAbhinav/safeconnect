@@ -733,27 +733,15 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // ── Battery-efficient: stop mesh + relay after 5 min in background, restart on foreground ──
+    // ── Relay service stops on background, Mesh stays ALWAYS ON ──
     useEffect(() => {
-        let bgTimer: ReturnType<typeof setTimeout> | null = null;
         const { AppState } = require('react-native');
         const handleAppState = (nextState: string) => {
             if (nextState === 'background' || nextState === 'inactive') {
                 // Stop background relay immediately — no point scanning with no UI
                 bleBackgroundRelayService.stopRelay();
-
-                // Stop mesh fully after 5 minutes in background
-                // (5 min gives time for notifications to arrive, but stops draining battery)
-                bgTimer = setTimeout(() => {
-                    if (bleMeshService.ready) {
-                        console.log('[HomeScreen] App in background 5 min — stopping mesh to save battery');
-                        bleMeshService.stopAll().catch(() => { });
-                    }
-                }, 5 * 60 * 1000); // 5 minutes
+                // We keep bleMeshService running to ensure offline capability indefinitely!
             } else if (nextState === 'active') {
-                // Cancel pending kill timer
-                if (bgTimer) { clearTimeout(bgTimer); bgTimer = null; }
-
                 // Restart relay service if mesh is active
                 if (bleMeshService.ready && !bleBackgroundRelayService.active) {
                     bleBackgroundRelayService.startRelay().catch(() => { });
@@ -769,7 +757,7 @@ const HomeScreen: React.FC<Props> = ({ navigation, route }) => {
             }
         };
         const sub = AppState.addEventListener('change', handleAppState);
-        return () => { sub?.remove(); if (bgTimer) clearTimeout(bgTimer); };
+        return () => { sub?.remove(); };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 

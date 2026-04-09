@@ -50,9 +50,10 @@ class PermissionService {
             ]);
 
             // Evaluate results
-            status.bluetooth =
+            status.bluetooth = Platform.Version < 31 ? true : (
                 results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN] === PermissionsAndroid.RESULTS.GRANTED ||
-                results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT] === PermissionsAndroid.RESULTS.GRANTED;
+                results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT] === PermissionsAndroid.RESULTS.GRANTED
+            );
 
             status.location =
                 results[PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION] === PermissionsAndroid.RESULTS.GRANTED;
@@ -96,7 +97,7 @@ class PermissionService {
         }
 
         // Initialize mesh networking (starts advertise + discover)
-    const ready = await bleMeshService.init(options.displayName);
+        const ready = await bleMeshService.init(options.displayName);
 
         if (!ready) {
             Alert.alert(

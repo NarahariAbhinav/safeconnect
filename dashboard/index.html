@@ -425,7 +425,7 @@
     /* Sidebar */
     .sb {
       width: var(--sb);
-      background: var(--white);
+      background: var(--bg);
       border-left: 2px solid var(--border);
       display: flex;
       flex-direction: column;
@@ -496,7 +496,7 @@
     .pnl {
       flex: 1;
       overflow-y: auto;
-      padding: 14px;
+      padding: 10px;
       display: none;
     }
 
@@ -515,23 +515,32 @@
       border-bottom: 2px solid var(--border);
     }
 
-    /* Cards */
+    /* Grid layout for sidebar panels */
+    .grid-wrap {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+
+    /* Cards — Grid Tile Style */
     .cd {
       background: var(--white);
       border: 1.5px solid var(--border);
-      border-radius: 13px;
-      padding: 14px;
-      margin-bottom: 8px;
+      border-radius: 14px;
+      padding: 12px;
       cursor: pointer;
-      transition: .18s;
+      transition: all .2s ease;
       position: relative;
       box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
 
     .cd:hover {
       border-color: var(--orange);
-      box-shadow: 0 4px 16px rgba(224, 90, 43, .12);
-      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(224, 90, 43, .14);
+      transform: translateY(-2px);
     }
 
     .cs {
@@ -545,57 +554,69 @@
 
     .cr {
       display: flex;
-      align-items: flex-start;
-      gap: 10px;
-      padding-left: 10px;
+      align-items: center;
+      gap: 8px;
+      padding-left: 6px;
     }
 
     .ca {
-      width: 36px;
-      height: 36px;
-      border-radius: 10px;
+      width: 32px;
+      height: 32px;
+      border-radius: 9px;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 15px;
+      font-size: 13px;
       font-weight: 800;
       flex-shrink: 0;
     }
 
     .cn {
-      font-size: 13px;
+      font-size: 11.5px;
       font-weight: 800;
       color: var(--brown);
-      line-height: 1.3;
+      line-height: 1.25;
       letter-spacing: -.2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .csub {
-      font-size: 11px;
+      font-size: 9.5px;
       color: var(--muted);
-      margin-top: 2px;
-      line-height: 1.4;
+      margin-top: 1px;
+      line-height: 1.3;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .cb {
-      font-size: 11.5px;
+      font-size: 10px;
       color: var(--muted);
-      padding-left: 10px;
-      margin-top: 7px;
-      line-height: 1.6;
+      padding-left: 6px;
+      margin-top: 5px;
+      line-height: 1.5;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      line-clamp: 2;
+      -webkit-box-orient: vertical;
     }
 
     .cf {
       display: flex;
       align-items: center;
       flex-wrap: wrap;
-      gap: 5px;
-      padding-left: 10px;
-      margin-top: 8px;
+      gap: 4px;
+      padding-left: 6px;
+      margin-top: 6px;
     }
 
     .ts {
-      font-size: 9.5px;
+      font-size: 8px;
       color: var(--muted);
       margin-left: auto;
     }
@@ -660,7 +681,7 @@
       height: 4px;
       background: var(--border);
       border-radius: 2px;
-      margin: 6px 7px 1px;
+      margin: 5px 6px 1px;
       overflow: hidden
     }
 
@@ -671,25 +692,25 @@
     }
 
     .cpl {
-      font-size: 10px;
+      font-size: 9px;
       color: var(--muted);
-      padding-left: 7px
+      padding-left: 6px
     }
 
     .rcs {
       display: flex;
       flex-wrap: wrap;
-      gap: 3px;
-      padding-left: 7px;
-      margin-top: 5px
+      gap: 2px;
+      padding-left: 6px;
+      margin-top: 4px
     }
 
     .rc {
-      background: var(--white);
+      background: var(--bg);
       color: var(--muted);
-      font-size: 9px;
+      font-size: 8px;
       font-weight: 600;
-      padding: 2px 5px;
+      padding: 1px 4px;
       border-radius: 4px;
       border: 1px solid var(--border)
     }
@@ -699,9 +720,9 @@
       background: var(--green);
       color: #fff;
       border: none;
-      border-radius: 8px;
-      padding: 7px 14px;
-      font-size: 11px;
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 9px;
       font-weight: 800;
       cursor: pointer;
       font-family: inherit;

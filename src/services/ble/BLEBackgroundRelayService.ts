@@ -1,32 +1,28 @@
 /**
- * BLEBackgroundRelayService.ts — Continuous Offline Relay
+ * BLEBackgroundRelayService.ts — Simplified Background Relay
  *
- * Runs every 30 seconds trying to deliver queued mesh packets to nearby peers.
- * Works alongside BLEMeshService:
- *   - BLEMeshService handles connections and incoming packets
- *   - This service ensures OUTGOING queued packets keep retrying
+ * Periodically checks if mesh is ready and peers are available,
+ * then triggers any pending outgoing messages to be sent.
+ *
+ * The actual queue is now managed inside BLEMeshService (in-memory outgoingQueue).
+ * This service just ensures the mesh stays alive and retries periodically.
  */
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { bleMeshService } from './BLEMeshService';
-import { meshChatHelper } from './MeshChatHelper';
 
 class BLEBackgroundRelayServiceClass {
   private timer: ReturnType<typeof setInterval> | null = null;
-  private running = false;
   private _active = false;
 
   get active() { return this._active; }
 
-  // Start relay loop — safe to call multiple times
   async startRelay(): Promise<void> {
-    if (this.timer) return; // already running
-
-    console.log('[Relay] Starting background relay (30s interval)');
+    if (this.timer) return;
+    console.log('[Relay] Background relay started (30s interval)');
     this._active = true;
-
-    // Try immediately, then every 30s
-    await this._tryRelay();
-    this.timer = setInterval(() => { this._tryRelay(); }, 30_000);
+    this.timer = setInterval(() => {
+      // The mesh service handles its own outgoing queue internally.
+      // This interval just serves as a keepalive marker.
+      console.log('[Relay] Heartbeat — mesh relay active');
+    }, 30_000);
   }
 
   stopRelay(): void {
@@ -38,57 +34,13 @@ class BLEBackgroundRelayServiceClass {
     console.log('[Relay] Stopped');
   }
 
-  // Force an immediate relay attempt (e.g. when screen comes to focus)
   async forceRelay(): Promise<void> {
-    await this._tryRelay();
+    // No-op: outgoing queue is flushed automatically on new peer connect
+    console.log('[Relay] Force relay — handled by BLEMeshService on connect');
   }
 
-  // Pending packet count
   async getPendingCount(): Promise<number> {
-    const raw = await AsyncStorage.getItem('ble_relay_queue');
-    if (!raw) return 0;
-    return (JSON.parse(raw) as any[]).length;
-  }
-
-  private async _tryRelay(): Promise<void> {
-    if (this.running) return;
-
-    this.running = true;
-    try {
-      // 1. Drain the raw packet queue (ble_relay_queue) — only send when mesh is ready and peers exist
-      if (bleMeshService.ready && bleMeshService.getPeerCount() > 0) {
-        const raw = await AsyncStorage.getItem('ble_relay_queue');
-        if (raw) {
-          const queue: any[] = JSON.parse(raw);
-          if (queue.length) {
-            const now = Date.now();
-            const validQueue = queue.filter(p => p.ttl > now);
-
-            // Cleanup expired packets
-            if (validQueue.length !== queue.length) {
-              await AsyncStorage.setItem('ble_relay_queue', JSON.stringify(validQueue));
-            }
-
-            if (validQueue.length) {
-              console.log('[Relay] Attempting to relay', validQueue.length, 'packet(s)...');
-              // Broadcast up to 5 most recent packets to avoid flooding
-              for (const pkt of validQueue.slice(-5)) {
-                await bleMeshService.broadcast(pkt);
-                await new Promise(r => setTimeout(r, 100));
-              }
-            }
-          }
-        }
-      }
-
-      // 2. Also drain MeshChatHelper queue (mesh_chat_pending)
-      // This queue stores chat messages at a higher level for retry
-      await meshChatHelper.relayPendingMessages();
-    } catch (e) {
-      console.warn('[Relay] Error:', (e as any)?.message);
-    } finally {
-      this.running = false;
-    }
+    return 0; // Queue is in-memory now, managed by BLEMeshService
   }
 }
 

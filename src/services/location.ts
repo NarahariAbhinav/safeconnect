@@ -22,7 +22,7 @@ export interface LocationSharingData {
 // ─── Google Maps API key (for fast reverse geocoding) ─────────────
 // Replace with your own key from https://console.cloud.google.com
 // Enable "Geocoding API" in the Google Cloud Console
-const GOOGLE_MAPS_API_KEY = 'AIzaSyAg6z7fFTWTRvw6nbA99fvTJLZWiFxsRbo';
+const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
 
 // (MOCK_LOCATION removed — callers now receive null when GPS is unavailable)
 

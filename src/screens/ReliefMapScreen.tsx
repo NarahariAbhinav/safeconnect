@@ -78,7 +78,7 @@ type ParamList = {
 };
 type Props = NativeStackScreenProps<ParamList, 'ReliefMap'>;
 
-const KEY_TRUSTED = 'safeconnect_trustedContacts';
+const KEY_TRUSTED = 'safeconnect_trusted_contacts';
 
 const ReliefMapScreen: React.FC<Props> = ({ navigation, route }) => {
     const loc = route.params?.location ?? null;

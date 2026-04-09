@@ -1,16 +1,19 @@
 /**
  * BLEMeshService.ts — Core Mesh Networking for SafeConnect
  *
- * Uses expo-nearby-connections (Google Nearby Connections on Android,
- * Apple Multipeer Connectivity on iOS).
+ * REWRITTEN: Bulletproof implementation.
  *
- * WHY: react-native-ble-plx is Central-only on Android — devices could scan
- * but were INVISIBLE to each other. Google Nearby Connections handles both
- * advertising AND discovery simultaneously using BLE + WiFi Direct with NO
- * internet required.
+ * CRITICAL FIXES:
+ *   1. Event listener return values MUST be stored as class properties.
+ *      expo-nearby-connections creates a new EventEmitter per onXxx() call.
+ *      If the returned unsubscribe closure is GC'd, the EventEmitter loses
+ *      its reference chain and the listener stops firing.
  *
- * Every device runs advertise + discover at the same time → true mesh.
- * Messages hop device-to-device until they reach a gateway with internet.
+ *   2. Kotlin native patch NO LONGER auto-accepts on the advertiser side.
+ *      Only JS calls acceptConnection (which registers payloadCallback).
+ *      The requestor side still auto-accepts in native (no JS event for it).
+ *
+ *   3. Single in-memory outgoing queue replaces 3 overlapping queue systems.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import CryptoJS from 'crypto-js';
@@ -21,31 +24,26 @@ import { Alert, Linking, Platform } from 'react-native';
 import { notificationService } from '../notificationService';
 import { GovtAction, sosService } from '../sos';
 
-const KEY_SMS_RELAYED = 'ble_sms_relayed'; // track which SOS we already relayed SMS for
+const KEY_SMS_RELAYED = 'ble_sms_relayed';
 
-// Android keep-alive task
 const MESH_KEEP_ALIVE_TASK = 'MESH_KEEP_ALIVE_TASK';
-TaskManager.defineTask(MESH_KEEP_ALIVE_TASK, async () => {
-  // Keeps CPU awake
-});
+TaskManager.defineTask(MESH_KEEP_ALIVE_TASK, async () => { /* keep CPU awake */ });
 
-// Kept for backward compat (some screens import these UUIDs for display)
+// Backward compat exports
 export const SC_SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
 export const SC_CHAR_UUID = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
 
-// ─── Packet ───────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────
 export interface MeshPacket {
   id: string;
-  type: 'sos' | 'needs' | 'resource' | 'ping' | 'govtAction' | 'chat';
-  payload: string;   // JSON-stringified data
-  origin: string;    // userId who sent this originally
-  hops: number;      // incremented at each relay hop
-  ttl: number;       // unix-ms expiry timestamp
+  type: 'sos' | 'needs' | 'resource' | 'ping' | 'govtAction' | 'chat' | 'chat_ack';
+  payload: string;
+  origin: string;
+  hops: number;
+  ttl: number;
   createdAt: number;
 }
 
-// UI event emitted at every connection lifecycle step — screens subscribe
-// to show Bluetooth-style popups without any internet required.
 export interface MeshUIEvent {
   event: 'found' | 'connecting' | 'invitation' | 'connected' | 'disconnected';
   peerId: string;
@@ -53,38 +51,65 @@ export interface MeshUIEvent {
 }
 
 const MAX_HOPS = 5;
-const TTL_MS = 12 * 60 * 60 * 1000;  // 12 hours
-const KEY_SEEN = 'ble_seen_packets';    // dedup store
-const KEY_QUEUE = 'ble_relay_queue';     // pending relay queue
-const STRATEGY = Nearby.Strategy.P2P_CLUSTER; // many-to-many mesh
+const TTL_MS = 12 * 60 * 60 * 1000;
+const STRATEGY = Nearby.Strategy.P2P_CLUSTER;
+
+// In-memory dedup (fast, no AsyncStorage overhead)
+const seenIds = new Set<string>();
+function markSeen(id: string) {
+  seenIds.add(id);
+  if (seenIds.size > 500) {
+    const first = seenIds.values().next().value;
+    if (first) seenIds.delete(first);
+  }
+}
 
 // ─── Service ──────────────────────────────────────────────────────
 class BLEMeshServiceClass {
   private _ready = false;
-  private _initialized = false;
-  private peers = new Set<string>();  // currently connected peer IDs
-  private pendingPeers = new Set<string>();
+  private _eventsRegistered = false;
+  private peers = new Map<string, string>(); // peerId → peerName
   private listeners: ((pkt: MeshPacket) => void)[] = [];
-  private unsubs: Array<() => void> = [];
-  private _name = 'SafeConnect-' + Math.floor(Math.random() * 9000 + 1000); // unique per session
-  private peerNames = new Map<string, string>(); // peerId → display name
   private uiListeners: ((e: MeshUIEvent) => void)[] = [];
-  private requestTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private _name = 'SC-' + Math.floor(Math.random() * 9000 + 1000);
+  private outgoingQueue: MeshPacket[] = [];
+
+  private async _persistQueue() {
+    try { await AsyncStorage.setItem('mesh_outgoing_queue', JSON.stringify(this.outgoingQueue)); } catch { }
+  }
+  private async _loadQueue() {
+    try {
+      const raw = await AsyncStorage.getItem('mesh_outgoing_queue');
+      if (raw) this.outgoingQueue = JSON.parse(raw);
+    } catch { }
+  }
+
+  /**
+   * CRITICAL: Store all event listener unsubscribe functions as class properties.
+   * The expo-nearby-connections library creates a NEW EventEmitter instance per
+   * onXxx() call. The returned unsubscribe closure holds the only reference chain
+   * to that EventEmitter. If this closure is garbage collected, the EventEmitter
+   * dies and the listener silently stops firing.
+   *
+   * By storing these as class properties, we prevent GC as long as the service lives.
+   */
+  private _unsubPeerFound: (() => void) | null = null;
+  private _unsubPeerLost: (() => void) | null = null;
+  private _unsubInvitation: (() => void) | null = null;
+  private _unsubConnected: (() => void) | null = null;
+  private _unsubDisconnected: (() => void) | null = null;
+  private _unsubTextReceived: (() => void) | null = null;
 
   // ── Public getters ─────────────────────────────────────────────
   get ready() { return this._ready; }
   get _peerCount() { return this.peers.size; }
   getPeerCount() { return this.peers.size; }
 
-  /** Returns list of currently connected peers with their display names */
   getConnectedPeers(): { id: string; name: string }[] {
-    return Array.from(this.peers).map(id => ({
-      id,
-      name: this.peerNames.get(id) ?? `Device-${id.slice(-4)}`,
-    }));
+    return Array.from(this.peers.entries()).map(([id, name]) => ({ id, name }));
   }
 
-  // ── UI event subscription (for connection popups in screens) ───
+  // ── UI event listeners ─────────────────────────────────────────
   addUIListener(cb: (e: MeshUIEvent) => void): void {
     if (!this.uiListeners.includes(cb)) this.uiListeners.push(cb);
   }
@@ -92,537 +117,426 @@ class BLEMeshServiceClass {
     this.uiListeners = this.uiListeners.filter(l => l !== cb);
   }
   private _emitUI(e: MeshUIEvent): void {
+    console.log('[Mesh] UI:', e.event, e.peerName);
     this.uiListeners.forEach(cb => { try { cb(e); } catch { } });
   }
 
-  private _shouldInitiateConnection(peerName: string, peerId: string): boolean {
-    const local = this._name.trim().toLowerCase();
-    const remote = peerName.trim().toLowerCase();
-    // Only use name comparison if names are non-empty AND clearly different
-    if (local && remote && local !== remote) return local > remote;
-    // Fallback: use peerId ordering so EXACTLY ONE side initiates (no deadlock)
-    return this._name > peerId;
+  // ── Data listeners ─────────────────────────────────────────────
+  addListener(cb: (pkt: MeshPacket) => void): void {
+    if (!this.listeners.includes(cb)) this.listeners.push(cb);
+  }
+  removeListener(cb: (pkt: MeshPacket) => void): void {
+    this.listeners = this.listeners.filter(l => l !== cb);
   }
 
-  private _getRequestDelay(peerId: string): number {
-    let hash = 0;
-    for (let i = 0; i < peerId.length; i++) hash = ((hash << 5) - hash) + peerId.charCodeAt(i);
-    return 700 + (Math.abs(hash) % 600) + Math.floor(Math.random() * 300);
-  }
-
-  private _clearPendingPeer(peerId: string): void {
-    const timer = this.requestTimers.get(peerId);
-    if (timer) clearTimeout(timer);
-    this.requestTimers.delete(peerId);
-    this.pendingPeers.delete(peerId);
-  }
-
-  // ── init() — call once on app launch ───────────────────────────
+  // ── init() ─────────────────────────────────────────────────────
   async init(displayName?: string): Promise<boolean> {
-    if (this._initialized && this._ready) return true;
-
-    // If displayName is provided, embed it but keep unique suffix
-    if (displayName) {
-      // Keep: "DisplayName-XXXX" format for uniqueness
-      const suffix = this._name.split('-').pop() ?? Math.floor(Math.random() * 9000 + 1000).toString();
-      this._name = `${displayName.slice(0, 20)}-${suffix}`;
+    if (this._ready) {
+      console.log('[Mesh] Already ready');
+      return true;
     }
 
-    // Register all event callbacks before starting advertising/discovery
-    this._registerEvents();
+    if (displayName) {
+      const suffix = Math.floor(Math.random() * 9000 + 1000);
+      this._name = `${displayName.slice(0, 16)}-${suffix}`;
+    }
+
+    await this._loadQueue();
+
+    // Register events ONCE — and STORE the unsubscribe functions
+    if (!this._eventsRegistered) {
+      this._registerEvents();
+      this._eventsRegistered = true;
+    }
 
     let advertiseOk = false;
     let discoverOk = false;
 
-    // Start advertising — makes this device visible to peers
     try {
       await Nearby.startAdvertise(this._name, STRATEGY);
       advertiseOk = true;
-      console.log('[Nearby] Advertising started ✅');
+      console.log('[Mesh] ✅ Advertising as:', this._name);
     } catch (e: any) {
-      console.warn('[Nearby] Advertising failed (may need permissions):', e?.message);
+      console.warn('[Mesh] Advertise failed:', e?.message);
     }
 
-    // Start discovery — finds other SafeConnect devices
     try {
       await Nearby.startDiscovery(this._name, STRATEGY);
       discoverOk = true;
-      console.log('[Nearby] Discovery started ✅');
+      console.log('[Mesh] ✅ Discovery started');
     } catch (e: any) {
-      console.warn('[Nearby] Discovery failed:', e?.message);
+      console.warn('[Mesh] Discovery failed:', e?.message);
     }
 
     this._ready = advertiseOk || discoverOk;
-    this._initialized = true;
 
     if (this._ready) {
-      console.log('[Nearby] ✅ Mesh ready. Advertise:', advertiseOk, '| Discover:', discoverOk);
+      console.log('[Mesh] ✅ Mesh ready — advertise:', advertiseOk, '| discover:', discoverOk);
       this._startForegroundService();
     } else {
-      console.error('[Nearby] ❌ Mesh failed — will retry in 4s (check Bluetooth/WiFi permissions)');
-      // Auto-retry once after 4 seconds — handles race condition at app startup
-      setTimeout(async () => {
-        if (!this._ready) {
-          console.log('[Nearby] Retrying mesh init...');
-          this._initialized = false;
-          await this.init(displayName);
-        }
+      console.error('[Mesh] ❌ Failed — retrying in 4s');
+      setTimeout(() => {
+        if (!this._ready) this.init(displayName);
       }, 4000);
     }
 
     return this._ready;
   }
 
-  // ── Start Android Foreground Service (Keep-Alive) ──────────────
-  private async _startForegroundService() {
-    try {
-      if (Platform.OS === 'android') {
-        const { status: fgStatus } = await Location.requestForegroundPermissionsAsync();
-        const { status: bgStatus } = await Location.requestBackgroundPermissionsAsync();
-
-        if (bgStatus === 'granted') {
-          await Location.startLocationUpdatesAsync(MESH_KEEP_ALIVE_TASK, {
-            accuracy: Location.Accuracy.Lowest,
-            timeInterval: 60000,
-            distanceInterval: 1000,
-            showsBackgroundLocationIndicator: true,
-            foregroundService: {
-              notificationTitle: 'SafeConnect Mesh is Active',
-              notificationBody: 'Routing emergency messages...',
-              notificationColor: '#2A7A5A',
-            },
-          });
-          console.log('[Nearby] Android Foreground Service started to keep mesh alive.');
-        }
-      }
-    } catch (e) {
-      console.warn('[Nearby] Foreground service start error:', e);
-    }
-  }
-
-  // ── Register Nearby event handlers ────────────────────────────
+  // ── Register events (exactly once) ─────────────────────────────
   private _registerEvents(): void {
-    // Remove previous listeners (safe to call init() multiple times)
-    this.unsubs.forEach(fn => { try { fn(); } catch { } });
-    this.unsubs = [];
+    console.log('[Mesh] Registering event listeners...');
 
-    // Peer discovered (we are discovering, peer is advertising)
-    this.unsubs.push(
-      Nearby.onPeerFound(({ peerId, name }: any) => {
-        const peerName = (name && name.trim()) ? name : `Device-${peerId.slice(-4)}`;
-        this.peerNames.set(peerId, peerName);
-        console.log('[Nearby] Peer found:', peerId, peerName);
-        this._emitUI({ event: 'found', peerId, peerName });
+    // ── Peer Found ───────────────────────────────────────────────
+    this._unsubPeerFound = Nearby.onPeerFound(({ peerId, name }: any) => {
+      const peerName = name?.trim() || `Device-${peerId.slice(-4)}`;
+      console.log('[Mesh] 🔍 Found:', peerName, peerId);
+      this._emitUI({ event: 'found', peerId, peerName });
 
-        if (this.peers.has(peerId) || this.pendingPeers.has(peerId) || this.requestTimers.has(peerId)) {
-          return;
-        }
+      if (this.peers.has(peerId)) return;
 
-        // Reduce symmetric request collisions: prefer one initiator when names differ,
-        // otherwise use peerId ordering (deterministic, no deadlock, no "both wait").
-        if (!this._shouldInitiateConnection(peerName, peerId)) {
-          console.log('[Nearby] Waiting for peer to initiate connection:', peerName);
-          return;
-        }
+      // Deterministic initiator (only one side connects)
+      const myLower = this._name.toLowerCase();
+      const theirLower = peerName.toLowerCase();
+      const iShouldInitiate = myLower > theirLower || (myLower === theirLower && this._name > peerId);
 
-        const delay = this._getRequestDelay(peerId);
-        const timer = setTimeout(() => {
-          this.requestTimers.delete(peerId);
-          if (this.peers.has(peerId) || this.pendingPeers.has(peerId)) return;
-          this.pendingPeers.add(peerId);
-          Nearby.requestConnection(peerId)
-            .then(() => this._emitUI({ event: 'connecting', peerId, peerName }))
-            .catch((e: any) => console.warn('[Nearby] requestConnection failed:', e?.message))
-            .finally(() => this.pendingPeers.delete(peerId));
-        }, delay);
-        this.requestTimers.set(peerId, timer);
-      })
-    );
+      if (!iShouldInitiate) {
+        console.log('[Mesh] ⏳ Waiting for', peerName, 'to initiate');
+        return;
+      }
 
-    // Peer went out of range
-    this.unsubs.push(
-      Nearby.onPeerLost(({ peerId }: any) => {
-        const peerName = this.peerNames.get(peerId) ?? `Device-${peerId.slice(-4)}`;
-        this._clearPendingPeer(peerId);
-        this.peers.delete(peerId);
-        this._emitUI({ event: 'disconnected', peerId, peerName });
-        console.log('[Nearby] Peer lost:', peerId, '| Peers now:', this.peers.size);
-      })
-    );
+      const delay = 500 + Math.floor(Math.random() * 1000);
+      setTimeout(() => {
+        if (this.peers.has(peerId)) return;
+        console.log('[Mesh] 📡 Requesting connection to', peerName);
+        this._emitUI({ event: 'connecting', peerId, peerName });
+        Nearby.requestConnection(peerId)
+          .then(() => console.log('[Mesh] Request sent to', peerName))
+          .catch((e: any) => console.warn('[Mesh] requestConnection err:', e?.message));
+      }, delay);
+    });
 
-    // Incoming connection request (we are advertising, peer is discovering)
-    this.unsubs.push(
-      Nearby.onInvitationReceived(({ peerId, name }: any) => {
-        const peerName = (name && name.trim()) ? name : (this.peerNames.get(peerId) ?? `Device-${peerId.slice(-4)}`);
-        this._clearPendingPeer(peerId);
-        this.peerNames.set(peerId, peerName);
-        console.log('[Nearby] Incoming invitation from:', peerId, peerName);
-        this._emitUI({ event: 'invitation', peerId, peerName });
-        // Always accept — SafeConnect is a trusted community app
-        Nearby.acceptConnection(peerId).catch((e: any) =>
-          console.warn('[Nearby] acceptConnection failed:', e?.message)
-        );
-      })
-    );
+    // ── Peer Lost ────────────────────────────────────────────────
+    this._unsubPeerLost = Nearby.onPeerLost(({ peerId }: any) => {
+      const name = this.peers.get(peerId) || `Device-${peerId.slice(-4)}`;
+      this.peers.delete(peerId);
+      this._emitUI({ event: 'disconnected', peerId, peerName: name });
+      console.log('[Mesh] Lost:', name, '| Peers:', this.peers.size);
+    });
 
-    // Connection fully established (both sides accepted)
-    this.unsubs.push(
-      Nearby.onConnected(async ({ peerId, name }: any) => {
-        const peerName = (name && name.trim()) ? name : (this.peerNames.get(peerId) ?? `Device-${peerId.slice(-4)}`);
-        this._clearPendingPeer(peerId);
-        this.peerNames.set(peerId, peerName);
-        this.peers.add(peerId);
-        this._emitUI({ event: 'connected', peerId, peerName });
-        console.log('[Nearby] ✅ Connected to', peerId, peerName, '| Peers:', this.peers.size);
-        // Immediately push any queued packets to the new peer
-        await this._flushQueueTo(peerId);
-      })
-    );
+    // ── Invitation Received (advertiser side) ────────────────────
+    // The Kotlin native module fires this when another device requests connection.
+    // We MUST call acceptConnection here — this is where Google Nearby registers
+    // the payloadCallback that enables sendText/onTextReceived to work.
+    this._unsubInvitation = Nearby.onInvitationReceived(({ peerId, name }: any) => {
+      const peerName = name?.trim() || `Device-${peerId.slice(-4)}`;
+      console.log('[Mesh] 📨 Invitation from:', peerName);
+      this._emitUI({ event: 'invitation', peerId, peerName });
 
-    // Peer disconnected
-    this.unsubs.push(
-      Nearby.onDisconnected(({ peerId }: any) => {
-        const peerName = this.peerNames.get(peerId) ?? `Device-${peerId.slice(-4)}`;
-        this._clearPendingPeer(peerId);
-        this.peers.delete(peerId);
-        this._emitUI({ event: 'disconnected', peerId, peerName });
-        console.log('[Nearby] Disconnected from', peerId, '| Peers:', this.peers.size);
-      })
-    );
+      // Accept the connection — this registers the payloadCallback
+      Nearby.acceptConnection(peerId)
+        .then(() => console.log('[Mesh] ✅ Accepted connection from', peerName))
+        .catch((e: any) => console.warn('[Mesh] acceptConnection err:', e?.message));
+    });
 
-    // Received a text payload from a peer (our packets are JSON strings)
-    this.unsubs.push(
-      Nearby.onTextReceived(async ({ peerId, text }: any) => {
-        try {
-          const pkt: MeshPacket = JSON.parse(text);
-          console.log('[Nearby] Received', pkt.type, 'packet from peer', peerId);
+    // ── Connected ────────────────────────────────────────────────
+    this._unsubConnected = Nearby.onConnected(({ peerId, name }: any) => {
+      const peerName = name?.trim() || `Device-${peerId.slice(-4)}`;
+      this.peers.set(peerId, peerName);
+      this._emitUI({ event: 'connected', peerId, peerName });
+      console.log('[Mesh] ✅ CONNECTED to', peerName, '| Total:', this.peers.size);
 
-          // E2EE Decryption for private chat messages
-          if (pkt.type === 'chat') {
-            try {
-              const payloadObj = JSON.parse(pkt.payload);
-              if (payloadObj.encrypted) {
-                // The roomId is the symmetric key for this E2EE implementation
-                const bytes = CryptoJS.AES.decrypt(payloadObj.message, payloadObj.roomId);
-                const decryptedStr = bytes.toString(CryptoJS.enc.Utf8);
-                if (decryptedStr) {
-                  payloadObj.message = JSON.parse(decryptedStr);
-                  pkt.payload = JSON.stringify(payloadObj);
+      // Flush queued outgoing messages
+      this._flushOutgoing(peerId);
+    });
+
+    // ── Disconnected ─────────────────────────────────────────────
+    this._unsubDisconnected = Nearby.onDisconnected(({ peerId }: any) => {
+      const name = this.peers.get(peerId) || `Device-${peerId.slice(-4)}`;
+      this.peers.delete(peerId);
+      this._emitUI({ event: 'disconnected', peerId, peerName: name });
+      console.log('[Mesh] ❌ Disconnected from', name, '| Total:', this.peers.size);
+    });
+
+    // ── Text Received (data payload) ─────────────────────────────
+    this._unsubTextReceived = Nearby.onTextReceived(({ peerId, text }: any) => {
+      console.log('[Mesh] 📦 Received from', peerId, '| len:', text?.length);
+
+      try {
+        const pkt: MeshPacket = JSON.parse(text);
+        console.log('[Mesh] Packet:', pkt.type, pkt.id, 'hops:', pkt.hops);
+
+        // E2EE decrypt for private chat
+        if (pkt.type === 'chat') {
+          try {
+            const p = JSON.parse(pkt.payload);
+            if (p.encrypted && p.roomId) {
+              const bytes = CryptoJS.AES.decrypt(p.message, p.roomId);
+              const dec = bytes.toString(CryptoJS.enc.Utf8);
+              if (dec) {
+                p.message = JSON.parse(dec);
+                pkt.payload = JSON.stringify(p);
+                console.log('[Mesh] 🔓 Decrypted private chat');
+
+                // Fire Network ACK back into the mesh confirming decryption/delivery
+                // Only do this if it's not a message we sent ourselves (logical user ID check)
+                if (p.message.senderId && p.message.id) {
+                  AsyncStorage.getItem('safeconnect_currentUser').then(raw => {
+                    if (raw) {
+                      try {
+                        const u = JSON.parse(raw);
+                        if (u.id && p.message.senderId !== u.id) {
+                          const ack = this.createChatAckPacket(p.message.id, p.roomId);
+                          // Fire-and-forget broadcast of the ACK
+                          this.broadcast(ack).catch(() => { });
+                        }
+                      } catch { }
+                    }
+                  }).catch(() => { });
                 }
               }
-            } catch (decErr) {
-              console.log('[Nearby] E2EE decryption failed (not for us or bad key)');
             }
+          } catch {
+            console.log('[Mesh] E2EE skip (not for us or group)');
           }
-
-          await this._handlePacket(pkt);
-        } catch (e) {
-          console.warn('[Nearby] Bad payload from', peerId, ':', e);
         }
-      })
-    );
+
+        this._handlePacket(pkt);
+      } catch (e) {
+        console.warn('[Mesh] Parse error:', e);
+      }
+    });
+
+    console.log('[Mesh] ✅ All 6 event listeners registered and stored');
   }
 
-  // ── startScanning — public API, idempotent ─────────────────────
-  async startScanning(onPacket?: (pkt: MeshPacket) => void): Promise<void> {
-    if (onPacket) this.addListener(onPacket);
-    if (!this._ready) await this.init();
-  }
-
-  // stopScanning is intentionally a no-op — mesh must stay active for relay
-  stopScanning(): void { }
-
-  // ── Listener management ────────────────────────────────────────
-  addListener(cb: (pkt: MeshPacket) => void): void {
-    if (!this.listeners.includes(cb)) this.listeners.push(cb);
-  }
-
-  removeListener(cb: (pkt: MeshPacket) => void): void {
-    this.listeners = this.listeners.filter(l => l !== cb);
-  }
-
-  // ── broadcast() — queue + send to all peers ────────────────────
-  async broadcast(pkt: MeshPacket): Promise<void> {
-    // ALWAYS mark as seen and enqueue — even if mesh isn't ready yet.
-    // This ensures messages are never silently dropped: the background relay
-    // will send them as soon as a peer connects and mesh becomes ready.
-    await this._markSeen(pkt.id);
-    await this._enqueue(pkt);
-
-    if (!this._ready) {
-      console.log('[Nearby] Mesh not ready — packet queued for retry when peers connect:', pkt.type);
-      return;
+  // ── Foreground Service ─────────────────────────────────────────
+  private async _startForegroundService() {
+    if (Platform.OS !== 'android') return;
+    try {
+      await Location.requestForegroundPermissionsAsync();
+      const { status } = await Location.requestBackgroundPermissionsAsync();
+      if (status === 'granted') {
+        await Location.startLocationUpdatesAsync(MESH_KEEP_ALIVE_TASK, {
+          accuracy: Location.Accuracy.Lowest,
+          timeInterval: 60000,
+          distanceInterval: 1000,
+          showsBackgroundLocationIndicator: true,
+          foregroundService: {
+            notificationTitle: 'SafeConnect Mesh Active',
+            notificationBody: 'Routing emergency messages...',
+            notificationColor: '#2A7A5A',
+          },
+        });
+        console.log('[Mesh] Foreground service started');
+      }
+    } catch (e) {
+      console.warn('[Mesh] Foreground service err:', e);
     }
+  }
+
+  // ── broadcast() ────────────────────────────────────────────────
+  async broadcast(pkt: MeshPacket): Promise<void> {
+    if (seenIds.has(pkt.id)) return;
+    markSeen(pkt.id);
+
     if (this.peers.size > 0) {
+      console.log('[Mesh] Broadcasting', pkt.type, 'to', this.peers.size, 'peer(s)');
       await this._sendToAll(pkt);
     } else {
-      console.log('[Nearby] No peers in range — packet queued for delivery');
+      console.log('[Mesh] No peers — queuing', pkt.type);
+      this._addToOutgoing(pkt);
     }
   }
 
-  // ── Send one packet to all currently connected peers ───────────
   private async _sendToAll(pkt: MeshPacket): Promise<void> {
-    const text = JSON.stringify(pkt);
-    const stale: string[] = [];
-    for (const peerId of this.peers) {
+    const json = JSON.stringify(pkt);
+    const dead: string[] = [];
+
+    for (const [peerId, peerName] of this.peers) {
       try {
-        await Nearby.sendText(peerId, text);
-        console.log('[Nearby] Sent', pkt.type, 'to', peerId);
+        await Nearby.sendText(peerId, json);
+        console.log('[Mesh] ✅ Sent', pkt.type, 'to', peerName);
       } catch (e: any) {
-        console.warn('[Nearby] Send failed to', peerId, ':', e?.message);
-        stale.push(peerId);
+        console.warn('[Mesh] ❌ Send failed to', peerName, ':', e?.message);
+        dead.push(peerId);
       }
     }
-    stale.forEach(id => this.peers.delete(id));
+
+    for (const id of dead) this.peers.delete(id);
   }
 
-  // ── When a new peer connects, push all queued packets to them ──
-  private async _flushQueueTo(peerId: string): Promise<void> {
-    const queue = await this._getQueue();
-    if (!queue.length) return;
-    console.log('[Nearby] Flushing', queue.length, 'queued packet(s) to', peerId);
-    for (const pkt of queue.slice(0, 5)) {
+  // ── Outgoing queue ─────────────────────────────────────────────
+  private _addToOutgoing(pkt: MeshPacket) {
+    if (this.outgoingQueue.some(p => p.id === pkt.id)) return;
+    this.outgoingQueue.push(pkt);
+    if (this.outgoingQueue.length > 50) this.outgoingQueue = this.outgoingQueue.slice(-50);
+    this._persistQueue().catch(() => { });
+  }
+
+  private async _flushOutgoing(peerId: string) {
+    if (this.outgoingQueue.length === 0) return;
+    console.log('[Mesh] Flushing', this.outgoingQueue.length, 'queued packets');
+    const batch = [...this.outgoingQueue];
+    this.outgoingQueue = [];
+    await this._persistQueue();
+
+    for (const pkt of batch) {
       try {
         await Nearby.sendText(peerId, JSON.stringify(pkt));
-      } catch {
-        break; // peer disconnected mid-flush, stop
+        await new Promise(r => setTimeout(r, 50));
+      } catch (e: any) {
+        console.warn('[Mesh] Flush err:', e?.message);
+        this._addToOutgoing(pkt);
+        break;
       }
     }
   }
 
-  // ── Handle an incoming packet ──────────────────────────────────
+  // ── Handle incoming packet ─────────────────────────────────────
   private async _handlePacket(pkt: MeshPacket): Promise<void> {
-    // 1. Deduplication
-    if (await this._seen(pkt.id)) { console.log('[Nearby] Dup dropped:', pkt.id); return; }
-    // 2. TTL expiry
-    if (Date.now() > pkt.ttl) { console.log('[Nearby] Expired dropped:', pkt.id); return; }
-    // 3. Hop limit
-    if (pkt.hops >= MAX_HOPS) { console.log('[Nearby] Max hops dropped:', pkt.id); return; }
+    if (seenIds.has(pkt.id)) { console.log('[Mesh] Dup:', pkt.id); return; }
+    if (Date.now() > pkt.ttl) { console.log('[Mesh] Expired:', pkt.id); return; }
+    if (pkt.hops >= MAX_HOPS) { console.log('[Mesh] Max hops:', pkt.id); return; }
 
-    await this._markSeen(pkt.id);
+    markSeen(pkt.id);
+
+    // Store locally
     await this._storeLocally(pkt);
 
-    // 4. Notify UI listeners IMMEDIATELY (non-blocking)
-    this.listeners.forEach(cb => { try { cb(pkt); } catch { } });
+    // Notify UI listeners
+    console.log('[Mesh] → Notifying', this.listeners.length, 'listener(s)');
+    this.listeners.forEach(cb => { try { cb(pkt); } catch (e) { console.warn('[Mesh] Listener err:', e); } });
 
-    // 5. Chat packets are ALWAYS delivered via BLE mesh only.
-    //    Firebase is NOT used for chat — messages travel peer-to-peer.
-    //    Both group (mesh_broadcast) and private room packets relay via BLE.
-    if (pkt.type === 'chat') {
+    // 5. Chat and Chat ACKs are ALWAYS delivered via BLE mesh only
+    //    Firebase is NOT used. Both group (mesh_broadcast) and private room packets rely on BLE.
+    if (pkt.type === 'chat' || pkt.type === 'chat_ack') {
       const relay: MeshPacket = { ...pkt, hops: pkt.hops + 1 };
-      await this._enqueue(relay);
-      if (this.peers.size > 0) await this._sendToAll(relay);
-      return; // chat never goes to Firebase
+      this._addToOutgoing(relay);
+      if (this.peers.size > 0) this._sendToAll(relay);
+      return;
     }
 
-    // 6. Non-chat packets (SOS, needs, resource, govtAction):
-    //    Always relay to other peers (mesh hop chain must continue even if we have internet).
-    //    If internet is available, ALSO push to Firebase (govt dashboard gateway).
-    //    This ensures: Device A(no internet) → Device B(has internet) → Firebase AND → Device C(no internet)
-    const relay: MeshPacket = { ...pkt, hops: pkt.hops + 1 };
-    await this._enqueue(relay);
-    if (this.peers.size > 0) await this._sendToAll(relay);
-
-    // Additionally, if we have internet, sync to Firebase (gateway function)
+    // Gateway sync for non-chat packets
     this._gatewaySync().catch(() => { });
   }
 
-  // ── Store packet data locally depending on type ────────────────
+  // ── Store locally ──────────────────────────────────────────────
   private async _storeLocally(pkt: MeshPacket): Promise<void> {
     try {
       const data = JSON.parse(pkt.payload);
 
       if (pkt.type === 'govtAction') {
         await sosService.storeGovtActionFromMesh(data as GovtAction);
-        console.log('[Nearby] GovtAction stored locally');
       }
-
 
       if (pkt.type === 'chat') {
         const { roomId, message } = data;
         if (!roomId) return;
-        // Guard: if message is still an encrypted string (e.g. relay device that doesn't
-        // have the decryption key for a private chat), skip storage but ALLOW relay.
-        // Group chat (mesh_broadcast) is never encrypted so message is always an object.
+
         const isGroup = roomId === 'mesh_broadcast';
         const isDecrypted = message && typeof message === 'object' && !!message.id;
+
         if (!isDecrypted && !isGroup) {
-          // Private packet we cannot decrypt — relay only, don't pollute storage
-          console.log('[Nearby] Private chat not for this device, relay-only.');
+          console.log('[Mesh] Private chat not for us — relay only');
           return;
         }
         if (!isDecrypted) {
-          // Group packet but somehow malformed — skip
-          console.log('[Nearby] Group chat message malformed, skipping.');
+          console.log('[Mesh] Malformed chat — skip');
           return;
         }
+
         const key = 'chat_messages_' + roomId;
         const raw = await AsyncStorage.getItem(key);
         const msgs: any[] = raw ? JSON.parse(raw) : [];
-        if (msgs.some(m => m.id === message.id)) return; // already have it
+        if (msgs.some(m => m.id === message.id)) return;
         msgs.push({ ...message, status: 'delivered' });
-        msgs.sort((a, b) => a.createdAt - b.createdAt);
+        msgs.sort((a: any, b: any) => a.createdAt - b.createdAt);
         await AsyncStorage.setItem(key, JSON.stringify(msgs));
-        console.log('[Nearby] Chat message stored locally:', message.id);
+        console.log('[Mesh] 💬 Stored:', message.id, 'in', roomId);
 
-        // Notify user about incoming message if it isn't from themselves
+        // Notification
         const meRaw = await AsyncStorage.getItem('safeconnect_currentUser');
-        const myUser = meRaw ? JSON.parse(meRaw) : null;
-        if (!myUser || message.senderId !== myUser.id) {
-          notificationService.notifyChatMessage(message.senderName || 'Someone', message.text || 'Sent a message', isGroup).catch(() => { });
+        const me = meRaw ? JSON.parse(meRaw) : null;
+        if (!me || message.senderId !== me.id) {
+          notificationService.notifyChatMessage(
+            message.senderName || 'Someone',
+            message.text || 'Sent a message',
+            isGroup
+          ).catch(() => { });
         }
       }
 
-      // ── SMS Gateway Relay — forward SOS alerts to non-app contacts ──
-      // When we receive an SOS from another user via mesh and we have signal,
-      // offer to send their emergency SMS to their contacts (who may not have
-      // SafeConnect). This is how User B (no app, has signal) gets notified.
       if (pkt.type === 'sos' && data.emergencyPhones?.length > 0) {
         await this._relaySMSForRemoteSOS(pkt.id, data);
       }
 
-      // ── Firebase Gateway Relay — push remote SOS to govt dashboard ──
-      // If this gateway device has internet, upload the remote user's SOS
-      // directly to Firebase so the govt dashboard sees it immediately,
-      // even though User A (the sender) has no internet themselves.
       if (pkt.type === 'sos' && !data.isTestPacket) {
         sosService.pushSOSToFirebase(data as Record<string, unknown>)
-          .then(ok => { if (ok) console.log('[Gateway] ✅ Remote SOS pushed to Firebase dashboard'); })
+          .then(ok => { if (ok) console.log('[Gateway] ✅ Remote SOS → Firebase'); })
           .catch(() => { });
       }
     } catch (e) {
-      console.warn('[Nearby] storeLocally error:', (e as any)?.message);
+      console.warn('[Mesh] storeLocally err:', (e as any)?.message);
     }
   }
 
-  /**
-   * SMS Gateway Relay — the critical bridge for non-app contacts.
-   *
-   * Scenario: User A (no signal, in disaster) → mesh → this device (gateway, has signal)
-   *           → SMS → User B (no SafeConnect app, has signal)
-   *
-   * This device opens the SMS compose screen pre-filled with User A's
-   * emergency contacts and message. The gateway user just taps Send.
-   */
+  // ── SMS Gateway ────────────────────────────────────────────────
   private async _relaySMSForRemoteSOS(packetId: string, data: any): Promise<void> {
-    // Check if we already relayed SMS for this SOS (dedup)
     const raw = await AsyncStorage.getItem(KEY_SMS_RELAYED);
     const relayed: string[] = raw ? JSON.parse(raw) : [];
     if (relayed.includes(packetId)) return;
 
     const phones: string[] = data.emergencyPhones;
-    const message: string = data.emergencyMessage || `🆘 EMERGENCY: ${data.userName || 'Someone'} needs help!`;
-    const senderName = data.userName || 'A nearby person';
+    const msg: string = data.emergencyMessage || `🆘 EMERGENCY: ${data.userName || 'Someone'} needs help!`;
+    const sender = data.userName || 'A nearby person';
 
-    // Check if this device has internet (i.e. gateway with signal)
     let hasSignal = false;
     try {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 3000);
-      const r = await fetch('https://www.google.com/generate_204', {
-        method: 'HEAD', cache: 'no-cache', signal: ctrl.signal,
-      });
+      const r = await fetch('https://www.google.com/generate_204', { method: 'HEAD', cache: 'no-cache', signal: ctrl.signal });
       clearTimeout(t);
       hasSignal = r.ok || r.status === 204;
     } catch { hasSignal = false; }
+    if (!hasSignal) return;
 
-    if (!hasSignal) {
-      console.log('[Gateway] No signal — cannot relay SMS for', senderName);
-      return;
-    }
-
-    // Mark as relayed immediately to avoid duplicate prompts
     relayed.push(packetId);
     if (relayed.length > 50) relayed.splice(0, relayed.length - 50);
     await AsyncStorage.setItem(KEY_SMS_RELAYED, JSON.stringify(relayed));
 
-    // Show push notification
-    await notificationService.notifyInfo(
-      '🆘 Forward SOS Alert',
-      `${senderName} is in danger nearby! Tap to forward their emergency SMS to ${phones.length} contact(s).`
-    );
-
-    // Show alert with action to forward SMS
-    const relayMessage = `[Forwarded via SafeConnect Mesh]\n${message}`;
+    await notificationService.notifyInfo('🆘 Forward SOS', `${sender} needs help!`);
 
     Alert.alert(
       '🆘 Nearby Person Needs Help!',
-      `${senderName} has no signal and sent an SOS via mesh.\n\n` +
-      `You have signal — tap "Forward SMS" to send their emergency alert to their ${phones.length} contact(s).\n\n` +
-      `This is how their family/friends will know they need help.`,
+      `${sender} has no signal. Forward their alert?`,
       [
-        {
-          text: 'Forward SMS',
-          onPress: () => {
-            // Open SMS compose with all emergency contacts pre-filled
-            const phoneList = phones.join(',');
-            Linking.openURL(
-              `sms:${phoneList}?body=${encodeURIComponent(relayMessage)}`
-            ).catch(e => console.warn('[Gateway] SMS relay open failed:', e));
-            console.log('[Gateway] ✅ SMS relay opened for', senderName, '→', phones.length, 'contacts');
-          },
-        },
+        { text: 'Forward SMS', onPress: () => { Linking.openURL(`sms:${phones.join(',')}?body=${encodeURIComponent(`[SafeConnect Mesh]\n${msg}`)}`).catch(() => { }); } },
         { text: 'Not Now', style: 'cancel' },
       ]
     );
   }
 
-  // ── Gateway sync — SOS ONLY to Firebase (govt dashboard) ──────────────
-  // Chat messages do NOT go through here — they are delivered via BLE mesh only.
-  // This runs only when internet is detected and only pushes pending SOS
-  // alerts so the government dashboard and rescue teams can see them.
+  // ── Gateway sync ───────────────────────────────────────────────
   private async _gatewaySync(): Promise<boolean> {
     try {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 3000);
-      const r = await fetch('https://www.google.com/generate_204', {
-        method: 'HEAD', cache: 'no-cache', signal: ctrl.signal,
-      });
+      const r = await fetch('https://www.google.com/generate_204', { method: 'HEAD', cache: 'no-cache', signal: ctrl.signal });
       clearTimeout(t);
       if (!r.ok && r.status !== 204) return false;
-    } catch {
-      return false; // offline
-    }
-    // Only sync SOS/emergency data to Firebase — NEVER chat messages
+    } catch { return false; }
     try {
       const { flushed } = await sosService.flushSyncQueue();
-      if (flushed > 0) console.log('[Gateway] SOS synced to Firebase:', flushed);
+      if (flushed > 0) console.log('[Gateway] Synced:', flushed);
     } catch { }
     return true;
   }
 
-  // ── Seen-packet deduplication ──────────────────────────────────
-  private async _seen(id: string): Promise<boolean> {
-    const raw = await AsyncStorage.getItem(KEY_SEEN);
-    return (raw ? JSON.parse(raw) as string[] : []).includes(id);
-  }
-
-  private async _markSeen(id: string): Promise<void> {
-    const raw = await AsyncStorage.getItem(KEY_SEEN);
-    const seen: string[] = raw ? JSON.parse(raw) : [];
-    seen.push(id);
-    if (seen.length > 200) seen.splice(0, seen.length - 200);
-    await AsyncStorage.setItem(KEY_SEEN, JSON.stringify(seen));
-  }
-
-  // ── Relay queue persistence ────────────────────────────────────
-  private async _getQueue(): Promise<MeshPacket[]> {
-    const raw = await AsyncStorage.getItem(KEY_QUEUE);
-    return raw ? JSON.parse(raw) : [];
-  }
-
-  private async _enqueue(pkt: MeshPacket): Promise<void> {
-    const q = await this._getQueue();
-    if (q.some(p => p.id === pkt.id)) return; // already queued
-    q.push(pkt);
-    if (q.length > 50) q.splice(0, q.length - 50);
-    await AsyncStorage.setItem(KEY_QUEUE, JSON.stringify(q));
-  }
-
-  // ── Packet factory methods (unchanged API) ─────────────────────
+  // ── Packet factories ───────────────────────────────────────────
   createSOSPacket(userId: string, payload: object): MeshPacket {
     return {
-      id: Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+      id: 'sos_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
       type: 'sos', payload: JSON.stringify(payload),
       origin: userId, hops: 0, ttl: Date.now() + TTL_MS, createdAt: Date.now(),
     };
@@ -648,58 +562,56 @@ class BLEMeshServiceClass {
     }
 
     return {
-      id: 'chat_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+      id: 'chat_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
       type: 'chat',
       payload: JSON.stringify({ roomId, message: finalMessage, encrypted }),
       origin: userId, hops: 0, ttl: Date.now() + TTL_MS, createdAt: Date.now(),
     };
   }
 
-  // ── Full shutdown ──────────────────────────────────────────────
-  destroy(): void {
-    this.unsubs.forEach(fn => { try { fn(); } catch { } });
-    this.unsubs = [];
-    this.listeners = [];
-    this.uiListeners = [];
-    this.requestTimers.forEach(timer => clearTimeout(timer));
-    this.requestTimers.clear();
-    this.pendingPeers.clear();
-    this.peerNames.clear();
-    try { Nearby.stopAdvertise(); } catch { }
-    try { Nearby.stopDiscovery(); } catch { }
-    try { Nearby.disconnect(); } catch { }
-    this._ready = false;
-    this._initialized = false;
-    this.peers.clear();
-    console.log('[Nearby] Service destroyed');
+  createChatAckPacket(messageId: string, roomId: string): MeshPacket {
+    return {
+      id: 'ack_' + messageId + '_' + Math.random().toString(36).slice(2, 6),
+      type: 'chat_ack',
+      payload: JSON.stringify({ messageId, roomId }),
+      origin: this._name,
+      hops: 0,
+      ttl: Date.now() + TTL_MS,
+      createdAt: Date.now(),
+    };
   }
 
-  /**
-   * stopAll() — complete shutdown including Android foreground service.
-   *
-   * Call this when the app goes to background to prevent battery drain:
-   * - Stops the Android foreground service (location keep-alive task)
-   * - Stops BLE advertising and discovery (radio power saved)
-   * - Clears all peer connections
-   *
-   * The mesh will auto-restart when the app comes back to foreground.
-   */
+  // ── Public API ─────────────────────────────────────────────────
+  async startScanning(onPacket?: (pkt: MeshPacket) => void): Promise<void> {
+    if (onPacket) this.addListener(onPacket);
+    if (!this._ready) await this.init();
+  }
+
+  stopScanning(): void { /* no-op */ }
+
+  // ── Shutdown ───────────────────────────────────────────────────
+  destroy(): void {
+    try { Nearby.stopAdvertise(); } catch { }
+    try { Nearby.stopDiscovery(); } catch { }
+    // Disconnect each peer individually (Android requires peerId)
+    for (const [peerId] of this.peers) {
+      try { Nearby.disconnect(peerId); } catch { }
+    }
+    this.peers.clear();
+    this.outgoingQueue = [];
+    this._ready = false;
+    // DO NOT null out _unsub* — they must stay alive for event listeners
+    console.log('[Mesh] Destroyed');
+  }
+
   async stopAll(): Promise<void> {
-    // Stop the Android foreground keep-alive location service first
     if (Platform.OS === 'android') {
       try {
-        const isRegistered = await TaskManager.isTaskRegisteredAsync(MESH_KEEP_ALIVE_TASK);
-        if (isRegistered) {
-          await Location.stopLocationUpdatesAsync(MESH_KEEP_ALIVE_TASK);
-          console.log('[Nearby] Android foreground service stopped ✅');
-        }
-      } catch (e) {
-        console.warn('[Nearby] Could not stop foreground service:', (e as any)?.message);
-      }
+        const isReg = await TaskManager.isTaskRegisteredAsync(MESH_KEEP_ALIVE_TASK);
+        if (isReg) await Location.stopLocationUpdatesAsync(MESH_KEEP_ALIVE_TASK);
+      } catch { }
     }
-    // Then destroy remaining connections and reset state
     this.destroy();
-    console.log('[Nearby] stopAll() complete — battery saved');
   }
 }
 
