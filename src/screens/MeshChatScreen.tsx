@@ -20,6 +20,7 @@ import Svg, { Path } from 'react-native-svg';
 import { bleMeshService, MeshUIEvent } from '../services/ble/BLEMeshService';
 import { ChatMessage, chatService } from '../services/chatService';
 import { contactsService, TrustedContact } from '../services/contacts';
+import { canonicalRoomId } from '../services/meshUtils';
 
 const C = {
     bg: '#EBF4F7', brown: '#2C1A0E', muted: '#8C7060',
@@ -54,19 +55,6 @@ const meshGroupContact: TrustedContact = {
     addedAt: 0,
 };
 
-// ─── Room Generation Fix ─────────────────────────────────────────
-function normalizePhone10(phone: string): string {
-    if (!phone) return '';
-    const digits = String(phone).replace(/\D/g, '');
-    return digits.length >= 10 ? digits.slice(-10) : digits;
-}
-
-function privateRoomId(myIdentifier: string, contactIdentifier: string): string {
-    const a = normalizePhone10(myIdentifier) || myIdentifier;
-    const b = normalizePhone10(contactIdentifier) || contactIdentifier;
-    if (!a || !b) return 'room_unknown';
-    return `room_${[a, b].sort().join('_')}`;
-}
 
 const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
     const { userId, userName, userPhone: paramPhone = '' } = route.params;
@@ -149,7 +137,15 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
         const handleBlePacket = (pkt: any) => {
             if (pkt.type === 'chat_ack') {
                 try {
-                    const { roomId: ackRoom, messageId } = JSON.parse(pkt.payload);
+                    const ackPayload = JSON.parse(pkt.payload);
+                    const { messageId } = ackPayload;
+
+                    // Derive roomId locally — ACK packets carry senderId+targetId, not roomId
+                    const ackRoom = ackPayload.roomId  // legacy fallback
+                        || (ackPayload.senderId && ackPayload.targetId
+                            ? canonicalRoomId(ackPayload.senderId, ackPayload.targetId)
+                            : null);
+                    if (!ackRoom || !messageId) return;
 
                     chatService.getMessagesByRoomId(ackRoom).then(stored => {
                         const msg = stored.find(m => m.id === messageId);
@@ -229,7 +225,7 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
 
         const roomId = isGroup
             ? MESH_GROUP_ROOM
-            : privateRoomId(fallbackMyId, fallbackTheirId);
+            : canonicalRoomId(fallbackMyId, fallbackTheirId);
 
         setContact(contact);
         setMessages([]);
@@ -256,7 +252,7 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
 
         const roomId = isGroup
             ? MESH_GROUP_ROOM
-            : privateRoomId(fallbackMyId, fallbackTheirId);
+            : canonicalRoomId(fallbackMyId, fallbackTheirId);
 
         try {
             const msg: ChatMessage = {
@@ -270,7 +266,7 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
             setMessages(prev => [...prev, msg]);
             messagesRef.current = [...messagesRef.current, msg];
 
-            const pkt = bleMeshService.createChatPacket(userId, roomId, msg);
+            const pkt = bleMeshService.createChatPacket(fallbackMyId, fallbackTheirId, roomId, msg);
             try { await bleMeshService.broadcast(pkt); } catch (e) { }
 
         } catch (e) { } finally {

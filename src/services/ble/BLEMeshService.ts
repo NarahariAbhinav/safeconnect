@@ -7,6 +7,7 @@ import * as Location from 'expo-location';
 import * as Nearby from 'expo-nearby-connections';
 import * as TaskManager from 'expo-task-manager';
 import { Alert, Linking, Platform } from 'react-native';
+import { canonicalRoomId, normaliseId } from '../meshUtils';
 import { notificationService } from '../notificationService';
 import { GovtAction, sosService } from '../sos';
 
@@ -57,6 +58,8 @@ class BLEMeshServiceClass {
   private outgoingQueue: MeshPacket[] = [];
 
   private _storageMutex = false;
+  /** Cached normalised phone of the local user (last 10 digits). */
+  private _myPhone = '';
 
   private async _persistQueue() {
     try { await AsyncStorage.setItem('mesh_outgoing_queue', JSON.stringify(this.outgoingQueue)); } catch (e) { }
@@ -68,6 +71,26 @@ class BLEMeshServiceClass {
       if (raw) this.outgoingQueue = JSON.parse(raw);
     } catch (e) { }
   }
+
+  /**
+   * Load and cache the local user's normalised phone number.
+   * Called lazily on first decryption attempt so init() doesn't need it.
+   */
+  private async _ensureMyPhone(): Promise<string> {
+    if (this._myPhone) return this._myPhone;
+    try {
+      const raw = await AsyncStorage.getItem('safeconnect_currentUser');
+      if (raw) {
+        const u = JSON.parse(raw);
+        const phone = u?.phone || u?.phoneNumber || '';
+        this._myPhone = normaliseId(phone);
+      }
+    } catch { }
+    return this._myPhone;
+  }
+
+  /** Invalidate cached phone (call on logout/profile change). */
+  clearMyPhoneCache() { this._myPhone = ''; }
 
   private _unsubPeerFound: (() => void) | null = null;
   private _unsubPeerLost: (() => void) | null = null;
@@ -237,46 +260,68 @@ class BLEMeshServiceClass {
       }
     });
 
-    this._unsubTextReceived = Nearby.onTextReceived(({ peerId, text }: any) => {
+    this._unsubTextReceived = Nearby.onTextReceived(async ({ peerId, text }: any) => {
       console.log('[Mesh] 📦 Received from', peerId, '| len:', text?.length);
 
       try {
         const pkt: MeshPacket = JSON.parse(text);
-        let localPktToStore = pkt;
+        let localPktToStore = pkt; // default: relay encrypted as-is
 
         if (pkt.type === 'chat') {
           try {
             const p = JSON.parse(pkt.payload);
-            if (p.encrypted && p.roomId) {
-              const aesKey = p.roomId + '_SC_SECRET_KEY';
-              const bytes = CryptoJS.AES.decrypt(p.message, aesKey);
-              const dec = bytes.toString(CryptoJS.enc.Utf8);
-              if (dec) {
-                const decryptedMessage = JSON.parse(dec);
-                console.log('[Mesh] 🔓 Decrypted private chat (local view only)');
 
-                if (decryptedMessage.senderId && decryptedMessage.id) {
-                  AsyncStorage.getItem('safeconnect_currentUser').then(raw => {
-                    if (raw) {
-                      try {
-                        const u = JSON.parse(raw);
-                        if (u.id && decryptedMessage.senderId !== u.id) {
-                          const ack = this.createChatAckPacket(decryptedMessage.id, p.roomId);
-                          this.broadcast(ack).catch(() => { });
-                        }
-                      } catch (e) { }
+            // ── TRUE E2EE PATH (new format: senderId + targetId, no roomId on wire) ──
+            if (p.encrypted && p.senderId && p.targetId) {
+              const myPhone = await this._ensureMyPhone();
+
+              if (myPhone && normaliseId(p.targetId) === myPhone) {
+                // ✅ This packet is addressed to ME — derive key locally and decrypt
+                const roomId = canonicalRoomId(p.senderId, p.targetId);
+                const aesKey = roomId + '_SC_SECRET_KEY';
+
+                try {
+                  const bytes = CryptoJS.AES.decrypt(p.message, aesKey);
+                  const dec = bytes.toString(CryptoJS.enc.Utf8);
+
+                  if (dec) {
+                    const decryptedMessage = JSON.parse(dec);
+                    console.log('[Mesh] 🔐 E2EE decrypted for', myPhone, '← from', p.senderId);
+
+                    // Send ACK back — carries senderId+targetId (NOT roomId) for E2EE privacy
+                    if (decryptedMessage.id) {
+                      const ack = this.createChatAckPacket(decryptedMessage.id, p.senderId, p.targetId);
+                      this.broadcast(ack).catch(() => { });
                     }
-                  }).catch(() => { });
+
+                    // Inject canonical roomId into localPktToStore so _storeLocally
+                    // can write to the correct AsyncStorage key
+                    localPktToStore = JSON.parse(JSON.stringify(pkt));
+                    localPktToStore.payload = JSON.stringify({
+                      ...p,
+                      roomId,           // derived locally — NEVER came from the wire
+                      message: decryptedMessage,
+                    });
+                  }
+                } catch {
+                  console.log('[Mesh] 🔐 E2EE decrypt failed (corrupt or wrong key)');
                 }
 
-                localPktToStore = JSON.parse(JSON.stringify(pkt));
-                const lp = JSON.parse(localPktToStore.payload);
-                lp.message = decryptedMessage;
-                localPktToStore.payload = JSON.stringify(lp);
+              } else {
+                // 🔒 NOT for me — relay the encrypted packet untouched
+                // localPktToStore stays as the original encrypted pkt;
+                // _storeLocally will detect the encrypted string and skip writing.
+                console.log('[Mesh] 🔒 Private packet not addressed to me — relaying only');
               }
+
+              // ── GROUP CHAT PATH (unencrypted, roomId = mesh_broadcast) ──────────
+            } else if (!p.encrypted && p.roomId === 'mesh_broadcast') {
+              // Group messages are plaintext; nothing to decrypt.
+              localPktToStore = pkt;
             }
+
           } catch {
-            console.log('[Mesh] E2EE skip (not for us or group)');
+            console.log('[Mesh] Chat parse error — skipping');
           }
         }
 
@@ -400,20 +445,33 @@ class BLEMeshServiceClass {
       }
 
       if (pkt.type === 'chat') {
-        const { roomId, message } = data;
-        if (!roomId) return;
+        // roomId is NEVER trusted from the wire for private chats.
+        // For true E2EE packets: roomId was injected by onTextReceived after local decryption.
+        // For group packets:    roomId = 'mesh_broadcast' (not secret).
+        // For relay packets:    message is still an encrypted string → isDecrypted = false → skip.
+        const { roomId, senderId, targetId, message } = data;
 
-        const isGroup = roomId === 'mesh_broadcast';
+        // Derive effective room key:
+        //   - private (E2EE): roomId was injected locally by onTextReceived
+        //   - fallback: derive from senderId + targetId if both are present
+        const effectiveRoomId: string | null =
+          roomId ||
+          (senderId && targetId ? canonicalRoomId(senderId, targetId) : null);
+
+        if (!effectiveRoomId) return;
+
+        const isGroup = effectiveRoomId === 'mesh_broadcast';
+
+        // Only store if the message object is fully decrypted (has an id field).
+        // An encrypted string payload means this device is a relay — skip storage.
         const isDecrypted = message && typeof message === 'object' && !!message.id;
-
-        if (!isDecrypted && !isGroup) return;
         if (!isDecrypted) return;
 
-        const key = 'chat_messages_' + roomId;
+        const key = 'chat_messages_' + effectiveRoomId;
         const raw = await AsyncStorage.getItem(key);
         const msgs: any[] = raw ? JSON.parse(raw) : [];
-        if (msgs.some(m => m.id === message.id)) return;
-        msgs.push({ ...message, status: 'delivered' });
+        if (msgs.some((m: any) => m.id === message.id)) return;
+        msgs.push({ ...message, roomId: effectiveRoomId, status: 'delivered' });
         msgs.sort((a: any, b: any) => a.createdAt - b.createdAt);
         await AsyncStorage.setItem(key, JSON.stringify(msgs));
 
@@ -511,30 +569,78 @@ class BLEMeshServiceClass {
     };
   }
 
-  createChatPacket(userId: string, roomId: string, message: object): MeshPacket {
+  /**
+   * Create an outgoing chat packet.
+   *
+   * TRUE E2EE CONTRACT:
+   *   • Private chats: payload contains { senderId, targetId, message: <AES ciphertext>, encrypted: true }
+   *     – The roomId and AES key are NEVER transmitted.
+   *     – Intermediate relay nodes see only senderId + targetId and an opaque ciphertext.
+   *     – Only the device whose normalised phone === targetId can derive the key and decrypt.
+   *
+   *   • Group chats: payload contains { roomId: 'mesh_broadcast', message: <object>, encrypted: false }
+   *     – Group is intentionally plaintext (broadcast to all nearby devices).
+   *
+   * @param mySenderId  Caller's phone or userId (normalised inside this function)
+   * @param targetId    Recipient's phone or userId (normalised inside this function)
+   * @param roomId      Local room key — used ONLY to detect group chat; never put on the wire
+   * @param message     Plaintext message object to encrypt
+   */
+  createChatPacket(
+    mySenderId: string,
+    targetId: string,
+    roomId: string,
+    message: object
+  ): MeshPacket {
     const isGroup = roomId === 'mesh_broadcast';
-    let finalMessage: any = message;
-    let encrypted = false;
 
-    if (!isGroup) {
-      const aesKey = roomId + '_SC_SECRET_KEY';
-      finalMessage = CryptoJS.AES.encrypt(JSON.stringify(message), aesKey).toString();
-      encrypted = true;
+    if (isGroup) {
+      // Group: plaintext broadcast, roomId is not sensitive
+      return {
+        id: 'chat_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        type: 'chat',
+        payload: JSON.stringify({ roomId, message, encrypted: false }),
+        origin: mySenderId, hops: 0, ttl: Date.now() + TTL_MS, createdAt: Date.now(),
+      };
     }
 
+    // Private: True E2EE
+    // 1. Normalise both identifiers so key is consistent regardless of formatting
+    const normSender = normaliseId(mySenderId);
+    const normTarget = normaliseId(targetId);
+
+    // 2. Derive AES key from canonical room ID — stays on this device only
+    const derivedRoomId = canonicalRoomId(normSender, normTarget);
+    const aesKey = derivedRoomId + '_SC_SECRET_KEY';
+    const encryptedMessage = CryptoJS.AES.encrypt(JSON.stringify(message), aesKey).toString();
+
+    // 3. Wire format: senderId + targetId (plaintext routing), encrypted blob (no roomId)
     return {
       id: 'chat_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
       type: 'chat',
-      payload: JSON.stringify({ roomId, message: finalMessage, encrypted }),
-      origin: userId, hops: 0, ttl: Date.now() + TTL_MS, createdAt: Date.now(),
+      payload: JSON.stringify({
+        senderId: normSender,
+        targetId: normTarget,
+        message: encryptedMessage,
+        encrypted: true,
+        // roomId is intentionally absent — receiver derives it locally
+      }),
+      origin: mySenderId, hops: 0, ttl: Date.now() + TTL_MS, createdAt: Date.now(),
     };
   }
 
-  createChatAckPacket(messageId: string, roomId: string): MeshPacket {
+  /**
+   * Create an ACK packet for a received private message.
+   *
+   * Like chat packets, ACKs carry senderId + targetId instead of roomId
+   * to prevent intermediate relay devices from learning which two phone
+   * numbers are communicating.
+   */
+  createChatAckPacket(messageId: string, senderId: string, targetId: string): MeshPacket {
     return {
       id: 'ack_' + messageId + '_' + Math.random().toString(36).slice(2, 6),
       type: 'chat_ack',
-      payload: JSON.stringify({ messageId, roomId }),
+      payload: JSON.stringify({ messageId, senderId: normaliseId(senderId), targetId: normaliseId(targetId) }),
       origin: this._name, hops: 0, ttl: Date.now() + TTL_MS, createdAt: Date.now(),
     };
   }

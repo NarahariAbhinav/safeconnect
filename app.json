@@ -42,6 +42,8 @@
         "ACCESS_NETWORK_STATE",
         "SEND_SMS",
         "READ_PHONE_STATE",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
         "android.permission.BLUETOOTH",
         "android.permission.BLUETOOTH_ADMIN",
         "android.permission.BLUETOOTH_CONNECT"

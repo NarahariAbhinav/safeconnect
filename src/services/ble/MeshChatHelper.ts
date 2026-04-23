@@ -14,6 +14,7 @@ const EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 interface PendingChat {
   roomId: string;
+  targetId: string;   // normalised phone of the recipient — needed for true E2EE
   message: any;
   attempts: number;
   createdAt: number;
@@ -22,12 +23,12 @@ interface PendingChat {
 class MeshChatHelperClass {
 
   // Add a message to the pending relay queue
-  async queueForMeshRelay(roomId: string, message: any): Promise<void> {
+  async queueForMeshRelay(roomId: string, targetId: string, message: any): Promise<void> {
     try {
       const pending = await this._load();
       if (pending.some(p => p.message.id === message.id)) return; // already queued
 
-      pending.push({ roomId, message, attempts: 0, createdAt: Date.now() });
+      pending.push({ roomId, targetId, message, attempts: 0, createdAt: Date.now() });
       await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(pending));
       console.log('[MeshChatHelper] Queued message for relay:', message.id);
     } catch (e) {
@@ -49,6 +50,7 @@ class MeshChatHelperClass {
       try {
         const pkt = bleMeshService.createChatPacket(
           entry.message.senderId,
+          entry.targetId,
           entry.roomId,
           entry.message,
         );

@@ -28,6 +28,7 @@ import ResourceOfferScreen from './src/screens/ResourceOfferScreen';
 import SignupScreen from './src/screens/SignupScreen';
 import SOSScreen from './src/screens/SOSScreen';
 import WelcomeScreen from './src/screens/WelcomeScreen';
+import { batteryService } from './src/services/batteryService';
 import { notificationService } from './src/services/notificationService';
 import { soundService } from './src/services/soundService';
 
@@ -211,6 +212,7 @@ const App = () => {
     // ── Init services on app startup ──
     notificationService.init();
     soundService.init();
+    batteryService.init();
   }, []);
 
   if (!isReady) {

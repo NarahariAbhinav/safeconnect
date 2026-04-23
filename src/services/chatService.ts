@@ -22,6 +22,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { canonicalRoomId } from './meshUtils';
 
 // ─── Types ────────────────────────────────────────────────────────
 export type MessageStatus = 'sending' | 'saved' | 'delivered' | 'ack';
@@ -48,9 +49,8 @@ export interface ChatRoom {
 }
 
 // ─── Key helpers ─────────────────────────────────────────────────
-const roomKey = (id1: string, id2: string) =>
-    `chat_room_${[id1, id2].sort().join('_')}`;
-
+// NOTE: room keys are produced by canonicalRoomId() from meshUtils.
+// Do NOT compute them inline — that was the source of the ghost-room bug.
 const messagesKey = (roomId: string) => `chat_messages_${roomId}`;
 
 const genId = () => `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -58,9 +58,9 @@ const genId = () => `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}
 // ─── Chat Service ─────────────────────────────────────────────────
 class ChatServiceClass {
 
-    // ── Get room ID (shared by both devices via sorted phone numbers) ──
+    // ── Get room ID (shared by both devices via sorted, normalised phone numbers) ──
     getRoomId(myId: string, contactId: string): string {
-        return roomKey(myId, contactId);
+        return canonicalRoomId(myId, contactId);
     }
 
     // ── Load all messages for a room from local storage ─────────────
@@ -93,7 +93,7 @@ class ChatServiceClass {
         type: ChatMessage['type'] = 'text',
         metadata?: Record<string, any>
     ): Promise<ChatMessage> {
-        const roomId = this.getRoomId(myId, contactId);
+        const roomId = canonicalRoomId(myId, contactId);
 
         const msg: ChatMessage = {
             id: genId(),
@@ -120,7 +120,7 @@ class ChatServiceClass {
         contactId: string,
         _onNewMessage?: (msg: ChatMessage) => void
     ): Promise<ChatMessage[]> {
-        const roomId = this.getRoomId(myId, contactId);
+        const roomId = canonicalRoomId(myId, contactId);
         return this._getLocalMessages(roomId);
     }
 
@@ -147,7 +147,7 @@ class ChatServiceClass {
         contactId: string,
         since: number
     ): Promise<ChatMessage[]> {
-        const roomId = this.getRoomId(myId, contactId);
+        const roomId = canonicalRoomId(myId, contactId);
         return this.pollNewMessagesByRoomId(roomId, myId, since);
     }
 
@@ -186,7 +186,8 @@ class ChatServiceClass {
      */
     async fetchAllFromFirebase(myId: string, contactId: string): Promise<ChatMessage[]> {
         console.log('[Chat] fetchAllFromFirebase() is disabled. Returning local messages.');
-        return this.getMessages(myId, contactId);
+        const roomId = canonicalRoomId(myId, contactId);
+        return this._getLocalMessages(roomId);
     }
 
     // ── Clear all messages for a room (e.g. on logout) ─────────────
