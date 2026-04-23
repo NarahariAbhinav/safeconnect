@@ -100,15 +100,17 @@ class PermissionService {
         const ready = await bleMeshService.init(options.displayName);
 
         if (!ready) {
-            Alert.alert(
-                '❌ Mesh Networking Unavailable',
-                'Could not start mesh networking. Please:\n\n' +
-                '1. Turn ON Bluetooth (swipe down → tap BT icon)\n' +
-                '2. Turn ON Wi-Fi\n' +
-                '3. Turn ON Location\n' +
-                '4. Restart the app\n\n' +
-                'If that doesn\'t work, restart your phone.'
-            );
+            if (options.showEnabledAlert !== false) {
+                Alert.alert(
+                    '❌ Mesh Networking Unavailable',
+                    'Could not start mesh networking. Please:\n\n' +
+                    '1. Turn ON Bluetooth (swipe down → tap BT icon)\n' +
+                    '2. Turn ON Wi-Fi\n' +
+                    '3. Turn ON Location\n' +
+                    '4. Restart the app\n\n' +
+                    'If that doesn\'t work, restart your phone.'
+                );
+            }
             return false;
         }
 

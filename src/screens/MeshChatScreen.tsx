@@ -1,21 +1,10 @@
 /**
  * MeshChatScreen.tsx — Offline-first Group & Private Chat
- *
- * REWRITTEN: Simplified, reliable mesh chat.
- *
- * Key changes:
- *   1. Single BLE listener handles all incoming messages
- *   2. Group chat uses BLE mesh only (no Firebase)
- *   3. Private chat uses phone-number-based room IDs + AES encryption
- *   4. Peer count is reactive (UI events + polling backup)
- *   5. Auto-restarts mesh if it was killed in background
  */
-
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    Alert,
     FlatList,
     KeyboardAvoidingView,
     Platform,
@@ -23,7 +12,7 @@ import {
     StyleSheet,
     TextInput,
     TouchableOpacity,
-    View,
+    View
 } from 'react-native';
 import { Text } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -31,9 +20,7 @@ import Svg, { Path } from 'react-native-svg';
 import { bleMeshService, MeshUIEvent } from '../services/ble/BLEMeshService';
 import { ChatMessage, chatService } from '../services/chatService';
 import { contactsService, TrustedContact } from '../services/contacts';
-import { permissionService } from '../services/permissionService';
 
-// ─── Colors ─────────────────────────────────────────────────────
 const C = {
     bg: '#EBF4F7', brown: '#2C1A0E', muted: '#8C7060',
     white: '#FFFFFF', green: '#2A7A5A', greenLight: 'rgba(42,122,90,0.12)',
@@ -43,7 +30,6 @@ const C = {
     offline: '#E65100',
 };
 
-// ─── Icons ──────────────────────────────────────────────────────
 const BackIcon = () => (
     <Svg width="22" height="22" viewBox="0 0 24 24" fill="none">
         <Path d="M19 12H5M12 19l-7-7 7-7" stroke={C.brown} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -58,7 +44,6 @@ const SendIcon = () => (
 type Params = { MeshChat: { userId: string; userName: string; userPhone?: string } };
 type Props = NativeStackScreenProps<Params, 'MeshChat'>;
 
-// ─── Mesh Group Chat constants ──────────────────────────────────
 const MESH_GROUP_ID = '__mesh_broadcast__';
 const MESH_GROUP_ROOM = 'mesh_broadcast';
 const meshGroupContact: TrustedContact = {
@@ -69,10 +54,11 @@ const meshGroupContact: TrustedContact = {
     addedAt: 0,
 };
 
-// Phone normalization for private chat room derivation
+// ─── Room Generation Fix ─────────────────────────────────────────
 function normalizePhone10(phone: string): string {
-    const digits = phone.replace(/\D/g, '');
-    return digits.length >= 10 ? digits.slice(-10) : '';
+    if (!phone) return '';
+    const digits = String(phone).replace(/\D/g, '');
+    return digits.length >= 10 ? digits.slice(-10) : digits;
 }
 
 function privateRoomId(myIdentifier: string, contactIdentifier: string): string {
@@ -97,9 +83,8 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
 
     const flatRef = useRef<FlatList<ChatMessage>>(null);
     const messagesRef = useRef<ChatMessage[]>([]);
-    const activeRoomRef = useRef<string>(''); // track which room is open
+    const activeRoomRef = useRef<string>('');
 
-    // ── Load userPhone from storage if not passed via nav ─────────
     useEffect(() => {
         if (paramPhone) return;
         AsyncStorage.getItem('safeconnect_currentUser').then(raw => {
@@ -112,12 +97,10 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
         });
     }, [paramPhone]);
 
-    // ── Load contacts ────────────────────────────────────────────
     useEffect(() => {
         contactsService.getTrusted().then(setContacts);
     }, []);
 
-    // ── Peer count: subscribe to UI events + poll backup ─────────
     useEffect(() => {
         const handleUI = (e: MeshUIEvent) => {
             if (e.event === 'connected' || e.event === 'disconnected') {
@@ -137,15 +120,12 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
         };
     }, []);
 
-    // ── Connectivity check ───────────────────────────────────────
     useEffect(() => {
         const ping = async () => {
             try {
                 const ctrl = new AbortController();
                 const t = setTimeout(() => ctrl.abort(), 3000);
-                const r = await fetch('https://www.google.com/generate_204', {
-                    method: 'HEAD', cache: 'no-cache', signal: ctrl.signal,
-                });
+                const r = await fetch('https://www.google.com/generate_204', { method: 'HEAD', cache: 'no-cache', signal: ctrl.signal });
                 clearTimeout(t);
                 setOnline(r.ok || r.status === 204);
             } catch {
@@ -157,38 +137,35 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
         return () => clearInterval(t);
     }, []);
 
-    // ── Auto-start mesh if needed ────────────────────────────────
+    // Popup Spam Fix: Start quietly via BLE service directly
     useEffect(() => {
         if (!bleMeshService.ready) {
-            console.log('[MeshChat] Mesh not ready — starting...');
-            permissionService.enableMesh({ displayName: userName, showEnabledAlert: false })
-                .catch(() => { });
+            console.log('[MeshChat] Mesh not ready — starting quietly...');
+            bleMeshService.init(userName).catch(() => { });
         }
     }, [userName]);
 
-    // ── BLE listener: receive mesh packets in real-time ──────────
-    // This is a GLOBAL listener — it runs for both group and private chat.
-    // It checks activeRoomRef to decide if the message should update the UI.
     useEffect(() => {
         const handleBlePacket = (pkt: any) => {
             if (pkt.type === 'chat_ack') {
                 try {
                     const { roomId: ackRoom, messageId } = JSON.parse(pkt.payload);
+
+                    chatService.getMessagesByRoomId(ackRoom).then(stored => {
+                        const msg = stored.find(m => m.id === messageId);
+                        if (msg && msg.status !== 'ack') {
+                            chatService.saveMessageToRoom(ackRoom, { ...msg, status: 'ack' });
+                        }
+                    });
+
                     if (ackRoom === activeRoomRef.current) {
                         setMessages(prev => {
                             const updated = prev.map(m => m.id === messageId ? { ...m, status: 'ack' as const } : m);
                             messagesRef.current = updated;
                             return updated;
                         });
-                        // Update in storage as well
-                        chatService.getMessagesByRoomId(ackRoom).then(stored => {
-                            const msg = stored.find(m => m.id === messageId);
-                            if (msg) chatService.saveMessageToRoom(ackRoom, { ...msg, status: 'ack' });
-                        });
                     }
-                } catch (e) {
-                    console.warn('[MeshChat] ACK Parse error:', e);
-                }
+                } catch (e) { }
                 return;
             }
 
@@ -198,46 +175,27 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
                 const payload = JSON.parse(pkt.payload);
                 const { roomId: pktRoom, message } = payload;
 
-                // Ignore own messages bouncing back
                 if (message?.senderId === userId) return;
+                if (!message || typeof message !== 'object' || !message.id) return;
 
-                // Validate message object
-                if (!message || typeof message !== 'object' || !message.id) {
-                    console.warn('[MeshChat] Malformed message received');
-                    return;
-                }
-
-                console.log('[MeshChat] 📦 Received message:', message.id, 'for room:', pktRoom);
-
-                // Only update UI if this room is currently open
                 if (pktRoom === activeRoomRef.current) {
                     setMessages(prev => {
                         if (prev.some(m => m.id === message.id)) return prev;
-                        const merged = [...prev, { ...message, status: 'delivered' as const }]
-                            .sort((a: any, b: any) => a.createdAt - b.createdAt);
+                        const merged = [...prev, { ...message, status: 'delivered' as const }].sort((a: any, b: any) => a.createdAt - b.createdAt);
                         messagesRef.current = merged;
                         return merged;
                     });
                     setTimeout(() => flatRef.current?.scrollToEnd({ animated: true }), 100);
                 }
 
-                // Always persist
                 chatService.saveMessageToRoom(pktRoom, { ...message, status: 'delivered' }).catch(() => { });
-            } catch (e) {
-                console.warn('[MeshChat] Parse error:', e);
-            }
+            } catch (e) { }
         };
 
         bleMeshService.addListener(handleBlePacket);
-        console.log('[MeshChat] BLE listener registered');
+        return () => { bleMeshService.removeListener(handleBlePacket); };
+    }, [userId]);
 
-        return () => {
-            bleMeshService.removeListener(handleBlePacket);
-            console.log('[MeshChat] BLE listener removed');
-        };
-    }, [userId]); // Only depends on userId — activeRoomRef is used for room check
-
-    // ── Poll local storage for messages received while screen was away ──
     useEffect(() => {
         if (screen !== 'chat' || !activeContact) return;
 
@@ -251,8 +209,7 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
             if (newOnes.length > 0) {
                 setMessages(prev => {
                     const ids = new Set(prev.map(m => m.id));
-                    const merged = [...prev, ...newOnes.filter(m => !ids.has(m.id))]
-                        .sort((a: any, b: any) => a.createdAt - b.createdAt);
+                    const merged = [...prev, ...newOnes.filter(m => !ids.has(m.id))].sort((a: any, b: any) => a.createdAt - b.createdAt);
                     messagesRef.current = merged;
                     return merged;
                 });
@@ -263,11 +220,13 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
         return () => clearInterval(interval);
     }, [screen, activeContact]);
 
-    // ── Open chat ────────────────────────────────────────────────
     const openChat = useCallback(async (contact: TrustedContact) => {
         const isGroup = contact.id === MESH_GROUP_ID;
+
+        // Use phone numbers first, fallback to UUID if absolutely necessary
         const fallbackMyId = userPhone || userId;
         const fallbackTheirId = contact.phone || contact.id;
+
         const roomId = isGroup
             ? MESH_GROUP_ROOM
             : privateRoomId(fallbackMyId, fallbackTheirId);
@@ -279,14 +238,12 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
 
         activeRoomRef.current = roomId;
 
-        // Load local messages immediately
         const localMsgs = await chatService.getMessagesByRoomId(roomId);
         setMessages(localMsgs);
         messagesRef.current = localMsgs;
         setTimeout(() => flatRef.current?.scrollToEnd({ animated: false }), 100);
-    }, [userPhone]);
+    }, [userId, userPhone]);
 
-    // ── Send message ─────────────────────────────────────────────
     const sendMessage = async () => {
         if (!inputText.trim() || !activeContact || sending) return;
         const text = inputText.trim();
@@ -304,35 +261,19 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
         try {
             const msg: ChatMessage = {
                 id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-                roomId,
-                senderId: userId,
-                senderName: userName,
-                text,
-                type: 'text',
-                createdAt: Date.now(),
-                status: 'saved',
+                roomId, senderId: userId, senderName: userName,
+                text, type: 'text', createdAt: Date.now(), status: 'saved',
             };
 
-            // Save locally first
             await chatService.saveMessageToRoom(roomId, msg);
 
-            // Show in UI immediately with ✓
             setMessages(prev => [...prev, msg]);
             messagesRef.current = [...messagesRef.current, msg];
 
-            // Broadcast via BLE mesh
             const pkt = bleMeshService.createChatPacket(userId, roomId, msg);
-            try {
-                await bleMeshService.broadcast(pkt);
-                console.log('[MeshChat] ✅ Message broadcast via BLE');
-            } catch (e: any) {
-                console.warn('[MeshChat] Broadcast error:', e?.message);
-            }
+            try { await bleMeshService.broadcast(pkt); } catch (e) { }
 
-            // Rely entirely on incoming chat_ack packets via BLEMeshService to upgrade status
-        } catch (e) {
-            console.error('[MeshChat] Send failed:', e);
-        } finally {
+        } catch (e) { } finally {
             setSending(false);
             setTimeout(() => flatRef.current?.scrollToEnd({ animated: true }), 100);
         }
@@ -344,7 +285,6 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
 
     const MACROS = ['🚨 Need Medical Help', '💧 Need Water/Food', '📍 Rescue Needed Here', '✅ We are Safe'];
 
-    // ── Online indicator ─────────────────────────────────────────
     const OnlineBadge = () => (
         <View style={[styles.badge, { backgroundColor: online ? C.greenLight : 'rgba(230,81,0,0.12)', borderColor: online ? C.green : C.offline }]}>
             <Text style={[styles.badgeText, { color: online ? C.green : C.offline }]}>
@@ -365,9 +305,6 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
             peerCount === 1 ? '1 peer connected · BLE mesh' :
                 `${peerCount} peers connected · BLE mesh`;
 
-    // ═══════════════════════════════════════════════════════════════
-    // CONTACTS LIST
-    // ═══════════════════════════════════════════════════════════════
     if (screen === 'list') {
         return (
             <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
@@ -384,7 +321,6 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
 
                 <OfflineBanner />
 
-                {/* Info card */}
                 <View style={styles.infoCard}>
                     <Text style={{ fontSize: 26 }}>💬</Text>
                     <View style={{ flex: 1 }}>
@@ -396,7 +332,6 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
                     </View>
                 </View>
 
-                {/* Mesh Group Chat */}
                 <TouchableOpacity
                     style={[styles.contactCard, { borderLeftWidth: 3, borderLeftColor: C.orange, marginHorizontal: 16, marginBottom: 4 }]}
                     onPress={() => openChat(meshGroupContact)}
@@ -418,7 +353,6 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
                     </View>
                 </TouchableOpacity>
 
-                {/* Private contacts */}
                 {contacts.length === 0 ? (
                     <View style={[styles.empty, { marginTop: 8 }]}>
                         <Text style={{ fontSize: 32, textAlign: 'center' }}>👥</Text>
@@ -457,16 +391,11 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
         );
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // CHAT CONVERSATION
-    // ═══════════════════════════════════════════════════════════════
     const isGroupChat = activeContact?.id === MESH_GROUP_ID;
 
     return (
         <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
             <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-
-                {/* Header */}
                 <View style={styles.header}>
                     <TouchableOpacity
                         style={styles.backBtn}
@@ -496,7 +425,6 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
 
                 <OfflineBanner />
 
-                {/* Messages */}
                 <FlatList
                     ref={flatRef}
                     data={messages}
@@ -547,7 +475,6 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
                     }}
                 />
 
-                {/* Macros */}
                 <View style={{ paddingHorizontal: 16, paddingBottom: 8, backgroundColor: C.bg }}>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
                         {MACROS.map(m => (
@@ -558,7 +485,6 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
                     </ScrollView>
                 </View>
 
-                {/* Input */}
                 <View style={styles.inputBar}>
                     <TextInput
                         style={styles.input}
@@ -586,7 +512,6 @@ const MeshChatScreen: React.FC<Props> = ({ navigation, route }) => {
     );
 };
 
-// ─── Styles ─────────────────────────────────────────────────────
 const styles = StyleSheet.create({
     safe: { flex: 1, backgroundColor: C.bg },
     header: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 14, backgroundColor: C.bg, paddingBottom: 16 },
@@ -621,7 +546,6 @@ const styles = StyleSheet.create({
     emptyChatTitle: { fontSize: 18, fontWeight: '800', color: C.brown, marginBottom: 8, letterSpacing: -0.3 },
     emptyChatSub: { fontSize: 13, color: C.muted, textAlign: 'center', lineHeight: 22, fontWeight: '500' },
 
-    // Premium Chat Bubbles
     bubbleRow: { flexDirection: 'row', marginBottom: 16, alignItems: 'flex-end', gap: 6 },
     bubbleRowMe: { flexDirection: 'row-reverse' },
     bubbleAvatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: C.orangeLight, alignItems: 'center', justifyContent: 'center', marginBottom: 2 },

@@ -1,22 +1,5 @@
 /**
  * BLEMeshService.ts — Core Mesh Networking for SafeConnect
- *
- * REWRITTEN: Bulletproof implementation.
- *
- * CRITICAL FIXES:
- * 1. Event listener return values MUST be stored as class properties.
- * expo-nearby-connections creates a new EventEmitter per onXxx() call.
- * If the returned unsubscribe closure is GC'd, the EventEmitter loses
- * its reference chain and the listener stops firing.
- *
- * 2. Kotlin native patch NO LONGER auto-accepts on the advertiser side.
- * Only JS calls acceptConnection (which registers payloadCallback).
- * The requestor side still auto-accepts in native (no JS event for it).
- *
- * 3. Single in-memory outgoing queue replaces 3 overlapping queue systems.
- * * 4. E2EE Privacy & Relay Fix: Packets are relayed in their original encrypted state.
- * Decryption only creates a local clone to prevent broadcasting plaintext.
- * * 5. Race Conditions Fixed: AsyncStorage writes in _storeLocally are now guarded by a mutex.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import CryptoJS from 'crypto-js';
@@ -32,11 +15,9 @@ const KEY_SMS_RELAYED = 'ble_sms_relayed';
 const MESH_KEEP_ALIVE_TASK = 'MESH_KEEP_ALIVE_TASK';
 TaskManager.defineTask(MESH_KEEP_ALIVE_TASK, async () => { /* keep CPU awake */ });
 
-// Backward compat exports
 export const SC_SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
 export const SC_CHAR_UUID = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
 
-// ─── Types ────────────────────────────────────────────────────────
 export interface MeshPacket {
   id: string;
   type: 'sos' | 'needs' | 'resource' | 'ping' | 'govtAction' | 'chat' | 'chat_ack';
@@ -57,7 +38,6 @@ const MAX_HOPS = 5;
 const TTL_MS = 12 * 60 * 60 * 1000;
 const STRATEGY = Nearby.Strategy.P2P_CLUSTER;
 
-// In-memory dedup (fast, no AsyncStorage overhead)
 const seenIds = new Set<string>();
 function markSeen(id: string) {
   seenIds.add(id);
@@ -67,17 +47,15 @@ function markSeen(id: string) {
   }
 }
 
-// ─── Service ──────────────────────────────────────────────────────
 class BLEMeshServiceClass {
   private _ready = false;
   private _eventsRegistered = false;
-  private peers = new Map<string, string>(); // peerId → peerName
+  private peers = new Map<string, string>();
   private listeners: ((pkt: MeshPacket) => void)[] = [];
   private uiListeners: ((e: MeshUIEvent) => void)[] = [];
   private _name = 'SC-' + Math.floor(Math.random() * 9000 + 1000);
   private outgoingQueue: MeshPacket[] = [];
 
-  // Storage Mutex to prevent AsyncStorage race conditions during packet floods
   private _storageMutex = false;
 
   private async _persistQueue() {
@@ -91,15 +69,6 @@ class BLEMeshServiceClass {
     } catch (e) { }
   }
 
-  /**
-   * CRITICAL: Store all event listener unsubscribe functions as class properties.
-   * The expo-nearby-connections library creates a NEW EventEmitter instance per
-   * onXxx() call. The returned unsubscribe closure holds the only reference chain
-   * to that EventEmitter. If this closure is garbage collected, the EventEmitter
-   * dies and the listener silently stops firing.
-   *
-   * By storing these as class properties, we prevent GC as long as the service lives.
-   */
   private _unsubPeerFound: (() => void) | null = null;
   private _unsubPeerLost: (() => void) | null = null;
   private _unsubInvitation: (() => void) | null = null;
@@ -107,7 +76,6 @@ class BLEMeshServiceClass {
   private _unsubDisconnected: (() => void) | null = null;
   private _unsubTextReceived: (() => void) | null = null;
 
-  // ── Public getters ─────────────────────────────────────────────
   get ready() { return this._ready; }
   get _peerCount() { return this.peers.size; }
   getPeerCount() { return this.peers.size; }
@@ -116,7 +84,6 @@ class BLEMeshServiceClass {
     return Array.from(this.peers.entries()).map(([id, name]) => ({ id, name }));
   }
 
-  // ── UI event listeners ─────────────────────────────────────────
   addUIListener(cb: (e: MeshUIEvent) => void): void {
     if (!this.uiListeners.includes(cb)) this.uiListeners.push(cb);
   }
@@ -128,7 +95,6 @@ class BLEMeshServiceClass {
     this.uiListeners.forEach(cb => { try { cb(e); } catch (e) { } });
   }
 
-  // ── Data listeners ─────────────────────────────────────────────
   addListener(cb: (pkt: MeshPacket) => void): void {
     if (!this.listeners.includes(cb)) this.listeners.push(cb);
   }
@@ -136,7 +102,6 @@ class BLEMeshServiceClass {
     this.listeners = this.listeners.filter(l => l !== cb);
   }
 
-  // ── init() ─────────────────────────────────────────────────────
   async init(displayName?: string): Promise<boolean> {
     if (this._ready) {
       console.log('[Mesh] Already ready');
@@ -150,7 +115,6 @@ class BLEMeshServiceClass {
 
     await this._loadQueue();
 
-    // Register events ONCE — and STORE the unsubscribe functions
     if (!this._eventsRegistered) {
       this._registerEvents();
       this._eventsRegistered = true;
@@ -190,11 +154,9 @@ class BLEMeshServiceClass {
     return this._ready;
   }
 
-  // ── Register events (exactly once) ─────────────────────────────
   private _registerEvents(): void {
     console.log('[Mesh] Registering event listeners...');
 
-    // ── Peer Found ───────────────────────────────────────────────
     this._unsubPeerFound = Nearby.onPeerFound(({ peerId, name }: any) => {
       const peerName = name?.trim() || `Device-${peerId.slice(-4)}`;
       console.log('[Mesh] 🔍 Found:', peerName, peerId);
@@ -202,7 +164,6 @@ class BLEMeshServiceClass {
 
       if (this.peers.has(peerId)) return;
 
-      // Deterministic initiator (only one side connects)
       const myLower = this._name.toLowerCase();
       const theirLower = peerName.toLowerCase();
       const iShouldInitiate = myLower > theirLower || (myLower === theirLower && this._name > peerId);
@@ -223,7 +184,6 @@ class BLEMeshServiceClass {
       }, delay);
     });
 
-    // ── Peer Lost ────────────────────────────────────────────────
     this._unsubPeerLost = Nearby.onPeerLost(({ peerId }: any) => {
       const name = this.peers.get(peerId) || `Device-${peerId.slice(-4)}`;
       this.peers.delete(peerId);
@@ -231,51 +191,59 @@ class BLEMeshServiceClass {
       console.log('[Mesh] Lost:', name, '| Peers:', this.peers.size);
     });
 
-    // ── Invitation Received (advertiser side) ────────────────────
-    // The Kotlin native module fires this when another device requests connection.
-    // We MUST call acceptConnection here — this is where Google Nearby registers
-    // the payloadCallback that enables sendText/onTextReceived to work.
     this._unsubInvitation = Nearby.onInvitationReceived(({ peerId, name }: any) => {
       const peerName = name?.trim() || `Device-${peerId.slice(-4)}`;
       console.log('[Mesh] 📨 Invitation from:', peerName);
       this._emitUI({ event: 'invitation', peerId, peerName });
 
-      // Accept the connection — this registers the payloadCallback
       Nearby.acceptConnection(peerId)
         .then(() => console.log('[Mesh] ✅ Accepted connection from', peerName))
         .catch((e: any) => console.warn('[Mesh] acceptConnection err:', e?.message));
     });
 
-    // ── Connected ────────────────────────────────────────────────
     this._unsubConnected = Nearby.onConnected(({ peerId, name }: any) => {
       const peerName = name?.trim() || `Device-${peerId.slice(-4)}`;
       this.peers.set(peerId, peerName);
       this._emitUI({ event: 'connected', peerId, peerName });
       console.log('[Mesh] ✅ CONNECTED to', peerName, '| Total:', this.peers.size);
-
-      // Flush queued outgoing messages
       this._flushOutgoing(peerId);
     });
 
-    // ── Disconnected ─────────────────────────────────────────────
     this._unsubDisconnected = Nearby.onDisconnected(({ peerId }: any) => {
       const name = this.peers.get(peerId) || `Device-${peerId.slice(-4)}`;
       this.peers.delete(peerId);
       this._emitUI({ event: 'disconnected', peerId, peerName: name });
       console.log('[Mesh] ❌ Disconnected from', name, '| Total:', this.peers.size);
+
+      // AUTO-RECONNECT LOGIC
+      try {
+        Nearby.stopDiscovery();
+        setTimeout(() => {
+          if (this._ready) Nearby.startDiscovery(this._name, STRATEGY).catch(() => { });
+        }, 1000);
+      } catch (e) { }
+
+      const myLower = this._name.toLowerCase();
+      const theirLower = name.toLowerCase();
+      const iShouldInitiate = myLower > theirLower || (myLower === theirLower && this._name > peerId);
+
+      if (iShouldInitiate) {
+        setTimeout(() => {
+          if (!this.peers.has(peerId)) {
+            console.log('[Mesh] 🔄 Attempting auto-reconnect to', name);
+            Nearby.requestConnection(peerId).catch(() => { });
+          }
+        }, 3000);
+      }
     });
 
-    // ── Text Received (data payload) ─────────────────────────────
     this._unsubTextReceived = Nearby.onTextReceived(({ peerId, text }: any) => {
       console.log('[Mesh] 📦 Received from', peerId, '| len:', text?.length);
 
       try {
         const pkt: MeshPacket = JSON.parse(text);
-        console.log('[Mesh] Packet:', pkt.type, pkt.id, 'hops:', pkt.hops);
-
         let localPktToStore = pkt;
 
-        // E2EE decrypt for private chat solely to verify if it's for us. We DO NOT mutate the relay packet.
         if (pkt.type === 'chat') {
           try {
             const p = JSON.parse(pkt.payload);
@@ -287,8 +255,6 @@ class BLEMeshServiceClass {
                 const decryptedMessage = JSON.parse(dec);
                 console.log('[Mesh] 🔓 Decrypted private chat (local view only)');
 
-                // Fire Network ACK back into the mesh confirming decryption/delivery
-                // Only do this if it's not a message we sent ourselves (logical user ID check)
                 if (decryptedMessage.senderId && decryptedMessage.id) {
                   AsyncStorage.getItem('safeconnect_currentUser').then(raw => {
                     if (raw) {
@@ -296,7 +262,6 @@ class BLEMeshServiceClass {
                         const u = JSON.parse(raw);
                         if (u.id && decryptedMessage.senderId !== u.id) {
                           const ack = this.createChatAckPacket(decryptedMessage.id, p.roomId);
-                          // Fire-and-forget broadcast of the ACK
                           this.broadcast(ack).catch(() => { });
                         }
                       } catch (e) { }
@@ -304,7 +269,6 @@ class BLEMeshServiceClass {
                   }).catch(() => { });
                 }
 
-                // create a detached clone for local consumption so we don't accidentally broadcast plaintext
                 localPktToStore = JSON.parse(JSON.stringify(pkt));
                 const lp = JSON.parse(localPktToStore.payload);
                 lp.message = decryptedMessage;
@@ -322,10 +286,9 @@ class BLEMeshServiceClass {
       }
     });
 
-    console.log('[Mesh] ✅ All 6 event listeners registered and stored');
+    console.log('[Mesh] ✅ All event listeners registered');
   }
 
-  // ── Foreground Service ─────────────────────────────────────────
   private async _startForegroundService() {
     if (Platform.OS !== 'android') return;
     try {
@@ -350,7 +313,6 @@ class BLEMeshServiceClass {
     }
   }
 
-  // ── broadcast() ────────────────────────────────────────────────
   async broadcast(pkt: MeshPacket): Promise<void> {
     if (seenIds.has(pkt.id)) return;
     markSeen(pkt.id);
@@ -371,7 +333,6 @@ class BLEMeshServiceClass {
     for (const [peerId, peerName] of this.peers) {
       try {
         await Nearby.sendText(peerId, json);
-        console.log('[Mesh] ✅ Sent', pkt.type, 'to', peerName);
       } catch (e: any) {
         console.warn('[Mesh] ❌ Send failed to', peerName, ':', e?.message);
         dead.push(peerId);
@@ -381,7 +342,6 @@ class BLEMeshServiceClass {
     for (const id of dead) this.peers.delete(id);
   }
 
-  // ── Outgoing queue ─────────────────────────────────────────────
   private _addToOutgoing(pkt: MeshPacket) {
     if (this.outgoingQueue.some(p => p.id === pkt.id)) return;
     this.outgoingQueue.push(pkt);
@@ -391,7 +351,6 @@ class BLEMeshServiceClass {
 
   private async _flushOutgoing(peerId: string) {
     if (this.outgoingQueue.length === 0) return;
-    console.log('[Mesh] Flushing', this.outgoingQueue.length, 'queued packets');
     const batch = [...this.outgoingQueue];
     this.outgoingQueue = [];
     await this._persistQueue();
@@ -401,32 +360,24 @@ class BLEMeshServiceClass {
         await Nearby.sendText(peerId, JSON.stringify(pkt));
         await new Promise(r => setTimeout(r, 50));
       } catch (e: any) {
-        console.warn('[Mesh] Flush err:', e?.message);
         this._addToOutgoing(pkt);
         break;
       }
     }
   }
 
-  // ── Handle incoming packet ─────────────────────────────────────
   private async _handlePacket(pkt: MeshPacket, localPkt?: MeshPacket): Promise<void> {
-    if (seenIds.has(pkt.id)) { console.log('[Mesh] Dup:', pkt.id); return; }
-    if (Date.now() > pkt.ttl) { console.log('[Mesh] Expired:', pkt.id); return; }
-    if (pkt.hops >= MAX_HOPS) { console.log('[Mesh] Max hops:', pkt.id); return; }
+    if (seenIds.has(pkt.id)) return;
+    if (Date.now() > pkt.ttl) return;
+    if (pkt.hops >= MAX_HOPS) return;
 
     markSeen(pkt.id);
-
     const pktForUI = localPkt || pkt;
 
-    // Store locally using mutexed local data
     await this._storeLocally(pktForUI);
 
-    // Notify UI listeners with the local readable payload
-    console.log('[Mesh] → Notifying', this.listeners.length, 'listener(s)');
-    this.listeners.forEach(cb => { try { cb(pktForUI); } catch (e) { console.warn('[Mesh] Listener err:', e); } });
+    this.listeners.forEach(cb => { try { cb(pktForUI); } catch (e) { } });
 
-    // 5. Chat and Chat ACKs are ALWAYS delivered via BLE mesh only
-    //    Firebase is NOT used. Both group (mesh_broadcast) and private room packets rely on BLE.
     if (pkt.type === 'chat' || pkt.type === 'chat_ack') {
       const relay: MeshPacket = { ...pkt, hops: pkt.hops + 1 };
       this._addToOutgoing(relay);
@@ -434,13 +385,10 @@ class BLEMeshServiceClass {
       return;
     }
 
-    // Gateway sync for non-chat packets
     this._gatewaySync().catch(() => { });
   }
 
-  // ── Store locally (with Race Condition Mutex Lock) ───────────────
   private async _storeLocally(pkt: MeshPacket): Promise<void> {
-    // Acquire mutex lock
     while (this._storageMutex) { await new Promise(r => setTimeout(r, 50)); }
     this._storageMutex = true;
 
@@ -458,14 +406,8 @@ class BLEMeshServiceClass {
         const isGroup = roomId === 'mesh_broadcast';
         const isDecrypted = message && typeof message === 'object' && !!message.id;
 
-        if (!isDecrypted && !isGroup) {
-          console.log('[Mesh] Private chat not for us — relay only');
-          return;
-        }
-        if (!isDecrypted) {
-          console.log('[Mesh] Malformed chat — skip');
-          return;
-        }
+        if (!isDecrypted && !isGroup) return;
+        if (!isDecrypted) return;
 
         const key = 'chat_messages_' + roomId;
         const raw = await AsyncStorage.getItem(key);
@@ -474,9 +416,7 @@ class BLEMeshServiceClass {
         msgs.push({ ...message, status: 'delivered' });
         msgs.sort((a: any, b: any) => a.createdAt - b.createdAt);
         await AsyncStorage.setItem(key, JSON.stringify(msgs));
-        console.log('[Mesh] 💬 Stored:', message.id, 'in', roomId);
 
-        // Notification
         const meRaw = await AsyncStorage.getItem('safeconnect_currentUser');
         const me = meRaw ? JSON.parse(meRaw) : null;
         if (!me || message.senderId !== me.id) {
@@ -493,19 +433,15 @@ class BLEMeshServiceClass {
       }
 
       if (pkt.type === 'sos' && !data.isTestPacket) {
-        sosService.pushSOSToFirebase(data as Record<string, unknown>)
-          .then(ok => { if (ok) console.log('[Gateway] ✅ Remote SOS → Firebase'); })
-          .catch(() => { });
+        sosService.pushSOSToFirebase(data as Record<string, unknown>).catch(() => { });
       }
     } catch (e) {
       console.warn('[Mesh] storeLocally err:', (e as any)?.message);
     } finally {
-      // Release mutex lock
       this._storageMutex = false;
     }
   }
 
-  // ── SMS Gateway ────────────────────────────────────────────────
   private async _relaySMSForRemoteSOS(packetId: string, data: any): Promise<void> {
     const raw = await AsyncStorage.getItem(KEY_SMS_RELAYED);
     const relayed: string[] = raw ? JSON.parse(raw) : [];
@@ -526,9 +462,7 @@ class BLEMeshServiceClass {
       hasSignal = false;
     }
 
-    if (!hasSignal) {
-      return;
-    }
+    if (!hasSignal) return;
 
     relayed.push(packetId);
     if (relayed.length > 50) relayed.splice(0, relayed.length - 50);
@@ -546,7 +480,6 @@ class BLEMeshServiceClass {
     );
   }
 
-  // ── Gateway sync ───────────────────────────────────────────────
   private async _gatewaySync(): Promise<boolean> {
     try {
       const ctrl = new AbortController();
@@ -562,7 +495,6 @@ class BLEMeshServiceClass {
     return true;
   }
 
-  // ── Packet factories ───────────────────────────────────────────
   createSOSPacket(userId: string, payload: object): MeshPacket {
     return {
       id: 'sos_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
@@ -584,7 +516,6 @@ class BLEMeshServiceClass {
     let finalMessage: any = message;
     let encrypted = false;
 
-    // E2EE Encryption for private chat messages
     if (!isGroup) {
       const aesKey = roomId + '_SC_SECRET_KEY';
       finalMessage = CryptoJS.AES.encrypt(JSON.stringify(message), aesKey).toString();
@@ -604,14 +535,10 @@ class BLEMeshServiceClass {
       id: 'ack_' + messageId + '_' + Math.random().toString(36).slice(2, 6),
       type: 'chat_ack',
       payload: JSON.stringify({ messageId, roomId }),
-      origin: this._name,
-      hops: 0,
-      ttl: Date.now() + TTL_MS,
-      createdAt: Date.now(),
+      origin: this._name, hops: 0, ttl: Date.now() + TTL_MS, createdAt: Date.now(),
     };
   }
 
-  // ── Public API ─────────────────────────────────────────────────
   async startScanning(onPacket?: (pkt: MeshPacket) => void): Promise<void> {
     if (onPacket) this.addListener(onPacket);
     if (!this._ready) await this.init();
@@ -619,18 +546,15 @@ class BLEMeshServiceClass {
 
   stopScanning(): void { /* no-op */ }
 
-  // ── Shutdown ───────────────────────────────────────────────────
   destroy(): void {
     try { Nearby.stopAdvertise(); } catch (e) { }
     try { Nearby.stopDiscovery(); } catch (e) { }
-    // Disconnect each peer individually (Android requires peerId)
     for (const [peerId] of this.peers) {
       try { Nearby.disconnect(peerId); } catch (e) { }
     }
     this.peers.clear();
     this.outgoingQueue = [];
     this._ready = false;
-    // DO NOT null out _unsub* — they must stay alive for event listeners
     console.log('[Mesh] Destroyed');
   }
 
